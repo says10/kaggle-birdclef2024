@@ -1,1 +1,2635 @@
-{"metadata":{"kernelspec":{"language":"python","display_name":"Python 3","name":"python3"},"language_info":{"name":"python","version":"3.7.12","mimetype":"text/x-python","codemirror_mode":{"name":"ipython","version":3},"pygments_lexer":"ipython3","nbconvert_exporter":"python","file_extension":".py"},"kaggle":{"accelerator":"nvidiaTeslaT4","dataSources":[{"sourceId":70203,"databundleVersionId":8068726,"sourceType":"competition"}],"dockerImageVersionId":30407,"isInternetEnabled":true,"language":"python","sourceType":"notebook","isGpuEnabled":true}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"markdown","source":"# Let's Think of a Better Split Method","metadata":{"papermill":{"duration":0.018531,"end_time":"2021-04-27T16:16:17.44056","exception":false,"start_time":"2021-04-27T16:16:17.422029","status":"completed"},"tags":[]}},{"cell_type":"code","source":"import numpy as np\nimport librosa as lb\nimport librosa.display as lbd\nimport soundfile as sf\nfrom  soundfile import SoundFile\nimport pandas as pd\nfrom  IPython.display import Audio\nfrom pathlib import Path\n\nfrom matplotlib import pyplot as plt\n\nfrom tqdm.notebook import tqdm\nimport joblib, json, re\n\nfrom  sklearn.model_selection  import StratifiedKFold\ntqdm.pandas()","metadata":{"id":"2dt7oG43VAqc","papermill":{"duration":2.637633,"end_time":"2021-04-27T16:16:20.164867","exception":false,"start_time":"2021-04-27T16:16:17.527234","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T07:58:16.911435Z","iopub.execute_input":"2024-06-02T07:58:16.912484Z","iopub.status.idle":"2024-06-02T07:58:17.596671Z","shell.execute_reply.started":"2024-06-02T07:58:16.912440Z","shell.execute_reply":"2024-06-02T07:58:17.595613Z"},"trusted":true},"execution_count":1,"outputs":[]},{"cell_type":"code","source":"df = pd.read_csv('/kaggle/input/birdclef-2024/train_metadata.csv')\ndf['secondary_labels'] = df['secondary_labels'].apply(lambda x: re.findall(r\"'(\\w+)'\", x))\ndf['len_sec_labels'] = df['secondary_labels'].map(len)\n","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.599339Z","iopub.execute_input":"2024-06-02T07:58:17.600242Z","iopub.status.idle":"2024-06-02T07:58:17.804809Z","shell.execute_reply.started":"2024-06-02T07:58:17.600196Z","shell.execute_reply":"2024-06-02T07:58:17.803642Z"},"trusted":true},"execution_count":2,"outputs":[]},{"cell_type":"code","source":"df[df.len_sec_labels>0].sample(3)","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.806274Z","iopub.execute_input":"2024-06-02T07:58:17.806701Z","iopub.status.idle":"2024-06-02T07:58:17.837257Z","shell.execute_reply.started":"2024-06-02T07:58:17.806656Z","shell.execute_reply":"2024-06-02T07:58:17.836260Z"},"trusted":true},"execution_count":3,"outputs":[{"execution_count":3,"output_type":"execute_result","data":{"text/plain":"      primary_label   secondary_labels                    type  latitude  \\\n2753        blakit1          [zitcis1]                ['call']   41.9570   \n21136       ruftre2  [brcful1, rewbul]                ['call']   18.8897   \n237         ashpri1           [revbul]  ['alarm call', 'call']   21.0484   \n\n       longitude        scientific_name     common_name  \\\n2753     -8.7464         Milvus migrans      Black Kite   \n21136    73.1232  Dendrocitta vagabunda  Rufous Treepie   \n237      75.8510        Prinia socialis     Ashy Prinia   \n\n                         author  \\\n2753               Jorge Leitão   \n21136            Saurabh Sawant   \n237    Lakshmikant Rajaram Neve   \n\n                                                 license  rating  \\\n2753   Creative Commons Attribution-NonCommercial-Sha...     2.5   \n21136  Creative Commons Attribution-NonCommercial-Sha...     4.5   \n237    Creative Commons Attribution-NonCommercial-Sha...     2.5   \n\n                                     url              filename  len_sec_labels  \n2753   https://www.xeno-canto.org/422663  blakit1/XC422663.ogg               1  \n21136  https://www.xeno-canto.org/120592  ruftre2/XC120592.ogg               2  \n237    https://www.xeno-canto.org/384390  ashpri1/XC384390.ogg               1  ","text/html":"<div>\n<style scoped>\n    .dataframe tbody tr th:only-of-type {\n        vertical-align: middle;\n    }\n\n    .dataframe tbody tr th {\n        vertical-align: top;\n    }\n\n    .dataframe thead th {\n        text-align: right;\n    }\n</style>\n<table border=\"1\" class=\"dataframe\">\n  <thead>\n    <tr style=\"text-align: right;\">\n      <th></th>\n      <th>primary_label</th>\n      <th>secondary_labels</th>\n      <th>type</th>\n      <th>latitude</th>\n      <th>longitude</th>\n      <th>scientific_name</th>\n      <th>common_name</th>\n      <th>author</th>\n      <th>license</th>\n      <th>rating</th>\n      <th>url</th>\n      <th>filename</th>\n      <th>len_sec_labels</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <th>2753</th>\n      <td>blakit1</td>\n      <td>[zitcis1]</td>\n      <td>['call']</td>\n      <td>41.9570</td>\n      <td>-8.7464</td>\n      <td>Milvus migrans</td>\n      <td>Black Kite</td>\n      <td>Jorge Leitão</td>\n      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n      <td>2.5</td>\n      <td>https://www.xeno-canto.org/422663</td>\n      <td>blakit1/XC422663.ogg</td>\n      <td>1</td>\n    </tr>\n    <tr>\n      <th>21136</th>\n      <td>ruftre2</td>\n      <td>[brcful1, rewbul]</td>\n      <td>['call']</td>\n      <td>18.8897</td>\n      <td>73.1232</td>\n      <td>Dendrocitta vagabunda</td>\n      <td>Rufous Treepie</td>\n      <td>Saurabh Sawant</td>\n      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n      <td>4.5</td>\n      <td>https://www.xeno-canto.org/120592</td>\n      <td>ruftre2/XC120592.ogg</td>\n      <td>2</td>\n    </tr>\n    <tr>\n      <th>237</th>\n      <td>ashpri1</td>\n      <td>[revbul]</td>\n      <td>['alarm call', 'call']</td>\n      <td>21.0484</td>\n      <td>75.8510</td>\n      <td>Prinia socialis</td>\n      <td>Ashy Prinia</td>\n      <td>Lakshmikant Rajaram Neve</td>\n      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n      <td>2.5</td>\n      <td>https://www.xeno-canto.org/384390</td>\n      <td>ashpri1/XC384390.ogg</td>\n      <td>1</td>\n    </tr>\n  </tbody>\n</table>\n</div>"},"metadata":{}}]},{"cell_type":"code","source":"df.primary_label.value_counts()","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.838600Z","iopub.execute_input":"2024-06-02T07:58:17.838999Z","iopub.status.idle":"2024-06-02T07:58:17.853339Z","shell.execute_reply.started":"2024-06-02T07:58:17.838956Z","shell.execute_reply":"2024-06-02T07:58:17.852032Z"},"trusted":true},"execution_count":4,"outputs":[{"execution_count":4,"output_type":"execute_result","data":{"text/plain":"zitcis1    500\nlirplo     500\nlitgre1    500\ncomgre     500\ncomkin1    500\n          ... \nblaeag1      6\nwynlau1      6\nniwpig1      5\nasiope1      5\nintegr       5\nName: primary_label, Length: 182, dtype: int64"},"metadata":{}}]},{"cell_type":"markdown","source":"# Something has to be done for Birds with <= 1 samples.","metadata":{}},{"cell_type":"markdown","source":"## Also the fact that we have to perform inference in 2 hours w/ CPU, I think best solution is just to have single split rather than using multiple folds.","metadata":{}},{"cell_type":"code","source":"from sklearn.model_selection import train_test_split\nimport pandas as pd\n\ndef birds_stratified_split(df, target_col, test_size=0.2):\n    class_counts = df[target_col].value_counts()\n    low_count_classes = class_counts[class_counts < 2].index.tolist() ### Birds with single counts\n\n    df['train'] = df[target_col].isin(low_count_classes)\n\n    train_df, val_df = train_test_split(df[~df['train']], test_size=test_size, stratify=df[~df['train']][target_col], random_state=42)\n\n    train_df = pd.concat([train_df, df[df['train']]], axis=0).reset_index(drop=True)\n\n    # Remove the 'valid' column\n    train_df.drop('train', axis=1, inplace=True)\n    val_df.drop('train', axis=1, inplace=True)\n\n    return train_df, val_df","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.857270Z","iopub.execute_input":"2024-06-02T07:58:17.858003Z","iopub.status.idle":"2024-06-02T07:58:17.866812Z","shell.execute_reply.started":"2024-06-02T07:58:17.857945Z","shell.execute_reply":"2024-06-02T07:58:17.865694Z"},"trusted":true},"execution_count":5,"outputs":[]},{"cell_type":"code","source":"train_df, valid_df = birds_stratified_split(df, 'primary_label', 0.2)","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.868201Z","iopub.execute_input":"2024-06-02T07:58:17.868600Z","iopub.status.idle":"2024-06-02T07:58:17.955492Z","shell.execute_reply.started":"2024-06-02T07:58:17.868561Z","shell.execute_reply":"2024-06-02T07:58:17.954312Z"},"trusted":true},"execution_count":6,"outputs":[]},{"cell_type":"code","source":"df.primary_label.value_counts()","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.956746Z","iopub.execute_input":"2024-06-02T07:58:17.957035Z","iopub.status.idle":"2024-06-02T07:58:17.969108Z","shell.execute_reply.started":"2024-06-02T07:58:17.957007Z","shell.execute_reply":"2024-06-02T07:58:17.967893Z"},"trusted":true},"execution_count":7,"outputs":[{"execution_count":7,"output_type":"execute_result","data":{"text/plain":"zitcis1    500\nlirplo     500\nlitgre1    500\ncomgre     500\ncomkin1    500\n          ... \nblaeag1      6\nwynlau1      6\nniwpig1      5\nasiope1      5\nintegr       5\nName: primary_label, Length: 182, dtype: int64"},"metadata":{}}]},{"cell_type":"code","source":"train_df.primary_label.value_counts()","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.970584Z","iopub.execute_input":"2024-06-02T07:58:17.970926Z","iopub.status.idle":"2024-06-02T07:58:17.982514Z","shell.execute_reply.started":"2024-06-02T07:58:17.970896Z","shell.execute_reply":"2024-06-02T07:58:17.981364Z"},"trusted":true},"execution_count":8,"outputs":[{"execution_count":8,"output_type":"execute_result","data":{"text/plain":"graher1    400\nlitgre1    400\nwoosan     400\neurcoo     400\ngrnsan     400\n          ... \nwynlau1      5\nblaeag1      5\nasiope1      4\nniwpig1      4\nintegr       4\nName: primary_label, Length: 182, dtype: int64"},"metadata":{}}]},{"cell_type":"code","source":"valid_df.primary_label.value_counts()","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:17.984237Z","iopub.execute_input":"2024-06-02T07:58:17.984736Z","iopub.status.idle":"2024-06-02T07:58:17.995002Z","shell.execute_reply.started":"2024-06-02T07:58:17.984695Z","shell.execute_reply":"2024-06-02T07:58:17.993923Z"},"trusted":true},"execution_count":9,"outputs":[{"execution_count":9,"output_type":"execute_result","data":{"text/plain":"houspa     100\nbarswa     100\nblrwar1    100\ncomros     100\ngraher1    100\n          ... \ndarter2      1\nniwpig1      1\nbncwoo3      1\nblaeag1      1\npaisto1      1\nName: primary_label, Length: 182, dtype: int64"},"metadata":{}}]},{"cell_type":"code","source":"class Config:\n    sampling_rate = 32000\n    duration = 5 \n    fmin = 0\n    fmax = None\n    audios_path = Path(\"/kaggle/input/birdclef-2024/train_audio\")\n    out_dir_train = Path(\"specs/train\") \n    \n    out_dir_valid = Path(\"specs/valid\") \n","metadata":{"papermill":{"duration":0.027531,"end_time":"2021-04-27T16:16:20.271347","exception":false,"start_time":"2021-04-27T16:16:20.243816","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T07:58:17.996304Z","iopub.execute_input":"2024-06-02T07:58:17.996669Z","iopub.status.idle":"2024-06-02T07:58:18.002853Z","shell.execute_reply.started":"2024-06-02T07:58:17.996630Z","shell.execute_reply":"2024-06-02T07:58:18.001881Z"},"trusted":true},"execution_count":10,"outputs":[]},{"cell_type":"code","source":"Config.out_dir_train.mkdir(exist_ok=True, parents=True)\nConfig.out_dir_valid.mkdir(exist_ok=True, parents=True)","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:18.004134Z","iopub.execute_input":"2024-06-02T07:58:18.004463Z","iopub.status.idle":"2024-06-02T07:58:18.011267Z","shell.execute_reply.started":"2024-06-02T07:58:18.004433Z","shell.execute_reply":"2024-06-02T07:58:18.010340Z"},"trusted":true},"execution_count":11,"outputs":[]},{"cell_type":"code","source":"def get_audio_info(filepath):\n    \"\"\"Get some properties from  an audio file\"\"\"\n    with SoundFile(filepath) as f:\n        sr = f.samplerate\n        frames = f.frames\n        duration = float(frames)/sr\n    return {\"frames\": frames, \"sr\": sr, \"duration\": duration}","metadata":{"papermill":{"duration":0.026875,"end_time":"2021-04-27T16:16:20.351194","exception":false,"start_time":"2021-04-27T16:16:20.324319","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T07:58:18.012615Z","iopub.execute_input":"2024-06-02T07:58:18.013085Z","iopub.status.idle":"2024-06-02T07:58:18.019465Z","shell.execute_reply.started":"2024-06-02T07:58:18.013045Z","shell.execute_reply":"2024-06-02T07:58:18.018484Z"},"trusted":true},"execution_count":12,"outputs":[]},{"cell_type":"code","source":"def add_path_df(df):\n    \n    df[\"path\"] = [str(Config.audios_path/filename) for filename in df.filename]\n    df = df.reset_index(drop=True)\n    pool = joblib.Parallel(2)\n    mapper = joblib.delayed(get_audio_info)\n    tasks = [mapper(filepath) for filepath in df.path]\n    df2 =  pd.DataFrame(pool(tqdm(tasks))).reset_index(drop=True)\n    df = pd.concat([df,df2], axis=1).reset_index(drop=True)\n\n    return df","metadata":{"id":"Kmh6xx5_NCjJ","outputId":"ad61f09f-6f0e-4204-c658-21112e051785","papermill":{"duration":0.031496,"end_time":"2021-04-27T16:16:20.401055","exception":false,"start_time":"2021-04-27T16:16:20.369559","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T07:58:18.020888Z","iopub.execute_input":"2024-06-02T07:58:18.021225Z","iopub.status.idle":"2024-06-02T07:58:18.032388Z","shell.execute_reply.started":"2024-06-02T07:58:18.021196Z","shell.execute_reply":"2024-06-02T07:58:18.031442Z"},"trusted":true},"execution_count":13,"outputs":[]},{"cell_type":"code","source":"tqdm.pandas()\n","metadata":{"execution":{"iopub.status.busy":"2024-06-02T07:58:18.037788Z","iopub.execute_input":"2024-06-02T07:58:18.038203Z","iopub.status.idle":"2024-06-02T07:58:18.043530Z","shell.execute_reply.started":"2024-06-02T07:58:18.038160Z","shell.execute_reply":"2024-06-02T07:58:18.042434Z"},"trusted":true},"execution_count":14,"outputs":[]},{"cell_type":"code","source":"train_df = add_path_df(train_df)","metadata":{"papermill":{"duration":0.017674,"end_time":"2021-04-27T16:16:20.436943","exception":false,"start_time":"2021-04-27T16:16:20.419269","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T07:58:18.044767Z","iopub.execute_input":"2024-06-02T07:58:18.045095Z","iopub.status.idle":"2024-06-02T08:00:16.286822Z","shell.execute_reply.started":"2024-06-02T07:58:18.045053Z","shell.execute_reply":"2024-06-02T08:00:16.285687Z"},"trusted":true},"execution_count":15,"outputs":[{"output_type":"display_data","data":{"text/plain":"  0%|          | 0/19567 [00:00<?, ?it/s]","application/vnd.jupyter.widget-view+json":{"version_major":2,"version_minor":0,"model_id":"3824200896f44c02942defe37c34d6c5"}},"metadata":{}}]},{"cell_type":"code","source":"valid_df = add_path_df(valid_df)","metadata":{"execution":{"iopub.status.busy":"2024-06-02T08:00:16.288267Z","iopub.execute_input":"2024-06-02T08:00:16.288592Z","iopub.status.idle":"2024-06-02T08:00:46.947197Z","shell.execute_reply.started":"2024-06-02T08:00:16.288558Z","shell.execute_reply":"2024-06-02T08:00:46.946318Z"},"trusted":true},"execution_count":16,"outputs":[{"output_type":"display_data","data":{"text/plain":"  0%|          | 0/4892 [00:00<?, ?it/s]","application/vnd.jupyter.widget-view+json":{"version_major":2,"version_minor":0,"model_id":"841aecea67684ac185861ffaed6706c9"}},"metadata":{}}]},{"cell_type":"code","source":"","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"train_df[\"duration\"].describe()","metadata":{"papermill":{"duration":0.257618,"end_time":"2021-04-27T16:18:04.144335","exception":false,"start_time":"2021-04-27T16:18:03.886717","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T08:00:46.948750Z","iopub.execute_input":"2024-06-02T08:00:46.949250Z","iopub.status.idle":"2024-06-02T08:00:46.962922Z","shell.execute_reply.started":"2024-06-02T08:00:46.949201Z","shell.execute_reply":"2024-06-02T08:00:46.961760Z"},"trusted":true},"execution_count":17,"outputs":[{"execution_count":17,"output_type":"execute_result","data":{"text/plain":"count    19567.000000\nmean        41.858233\nstd         98.451733\nmin          0.470000\n25%         11.180406\n50%         22.230219\n75%         44.564906\nmax       4670.641625\nName: duration, dtype: float64"},"metadata":{}}]},{"cell_type":"code","source":"def compute_melspec(y, sr, n_mels, fmin, fmax):\n    \"\"\"\n    Computes a mel-spectrogram and puts it at decibel scale\n    Arguments:\n        y {np array} -- signal\n        params {AudioParams} -- Parameters to use for the spectrogram. Expected to have the attributes sr, n_mels, f_min, f_max\n    Returns:\n        np array -- Mel-spectrogram\n    \"\"\"\n    melspec = lb.feature.melspectrogram(\n        y=y, sr=sr, n_mels=n_mels, fmin=fmin, fmax=fmax,\n    )\n\n    melspec = lb.power_to_db(melspec).astype(np.float32)\n    return melspec","metadata":{"execution":{"iopub.status.busy":"2024-06-02T08:00:46.964266Z","iopub.execute_input":"2024-06-02T08:00:46.964889Z","iopub.status.idle":"2024-06-02T08:00:46.971198Z","shell.execute_reply.started":"2024-06-02T08:00:46.964856Z","shell.execute_reply":"2024-06-02T08:00:46.970143Z"},"trusted":true},"execution_count":18,"outputs":[]},{"cell_type":"code","source":"def mono_to_color(X, eps=1e-6, mean=None, std=None):\n    mean = mean or X.mean()\n    std = std or X.std()\n    X = (X - mean) / (std + eps)\n    \n    _min, _max = X.min(), X.max()\n\n    if (_max - _min) > eps:\n        V = np.clip(X, _min, _max)\n        V = 255 * (V - _min) / (_max - _min)\n        V = V.astype(np.uint8)\n    else:\n        V = np.zeros_like(X, dtype=np.uint8)\n\n    return V\n\ndef crop_or_pad(y, length, is_train=True, start=None):\n    if len(y) < length:\n        y = np.concatenate([y, np.zeros(length - len(y))])\n        \n        n_repeats = length // len(y)\n        epsilon = length % len(y)\n        \n        y = np.concatenate([y]*n_repeats + [y[:epsilon]])\n        \n    elif len(y) > length:\n        if not is_train:\n            start = start or 0\n        else:\n            start = start or np.random.randint(len(y) - length)\n\n        y = y[start:start + length]\n\n    return y","metadata":{"id":"-Nlw4E5UVAqi","papermill":{"duration":0.036932,"end_time":"2021-04-27T16:18:04.507902","exception":false,"start_time":"2021-04-27T16:18:04.47097","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T08:00:46.972672Z","iopub.execute_input":"2024-06-02T08:00:46.973649Z","iopub.status.idle":"2024-06-02T08:00:46.986170Z","shell.execute_reply.started":"2024-06-02T08:00:46.973609Z","shell.execute_reply":"2024-06-02T08:00:46.985139Z"},"trusted":true},"execution_count":19,"outputs":[]},{"cell_type":"code","source":"","metadata":{},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"class AudioToImage:\n    def __init__(self, sr=Config.sampling_rate, n_mels=128, fmin=Config.fmin, fmax=Config.fmax, duration=Config.duration, step=None, res_type=\"kaiser_fast\", resample=True, train = True):\n\n        self.sr = sr\n        self.n_mels = n_mels\n        self.fmin = fmin\n        self.fmax = fmax or self.sr//2\n\n        self.duration = duration\n        self.audio_length = self.duration*self.sr\n        self.step = step or self.audio_length\n        \n        self.res_type = res_type\n        self.resample = resample\n\n        self.train = train\n    def audio_to_image(self, audio):\n        melspec = compute_melspec(audio, self.sr, self.n_mels, self.fmin, self.fmax ) \n        image = mono_to_color(melspec)\n#         compute_melspec(y, sr, n_mels, fmin, fmax)\n        return image\n\n    def __call__(self, row, save=True):\n\n      audio, orig_sr = sf.read(row.path, dtype=\"float32\")\n\n      if self.resample and orig_sr != self.sr:\n        audio = lb.resample(audio, orig_sr, self.sr, res_type=self.res_type)\n        \n      audios = [audio[i:i+self.audio_length] for i in range(0, max(1, len(audio) - self.audio_length + 1), self.step)]\n      audios[-1] = crop_or_pad(audios[-1] , length=self.audio_length)\n      images = [self.audio_to_image(audio) for audio in audios]\n      images = np.stack(images)\n        \n      if save:\n        if self.train:\n            path = Config.out_dir_train/f\"{row.filename}.npy\"\n        else:\n            path = Config.out_dir_valid/f\"{row.filename}.npy\"\n            \n        path.parent.mkdir(exist_ok=True, parents=True)\n        np.save(str(path), images)\n      else:\n        return  row.filename, images","metadata":{"papermill":{"duration":0.039542,"end_time":"2021-04-27T16:18:04.570629","exception":false,"start_time":"2021-04-27T16:18:04.531087","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T08:00:46.987321Z","iopub.execute_input":"2024-06-02T08:00:46.987667Z","iopub.status.idle":"2024-06-02T08:00:47.003907Z","shell.execute_reply.started":"2024-06-02T08:00:46.987628Z","shell.execute_reply":"2024-06-02T08:00:47.002745Z"},"trusted":true},"execution_count":20,"outputs":[]},{"cell_type":"code","source":"tqdm.pandas()","metadata":{"execution":{"iopub.status.busy":"2024-06-02T08:00:47.005249Z","iopub.execute_input":"2024-06-02T08:00:47.005613Z","iopub.status.idle":"2024-06-02T08:00:47.015029Z","shell.execute_reply.started":"2024-06-02T08:00:47.005584Z","shell.execute_reply":"2024-06-02T08:00:47.013995Z"},"trusted":true},"execution_count":21,"outputs":[]},{"cell_type":"code","source":"def get_audios_as_images(df, train = True):\n    pool = joblib.Parallel(2)\n    \n    converter = AudioToImage(step=int(Config.duration*0.666*Config.sampling_rate),train=train)\n    mapper = joblib.delayed(converter)\n    tasks = [mapper(row) for row in df.itertuples(False)]\n    pool(tqdm(tasks))","metadata":{"papermill":{"duration":0.032362,"end_time":"2021-04-27T16:18:04.626619","exception":false,"start_time":"2021-04-27T16:18:04.594257","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T08:00:47.016344Z","iopub.execute_input":"2024-06-02T08:00:47.016741Z","iopub.status.idle":"2024-06-02T08:00:47.023927Z","shell.execute_reply.started":"2024-06-02T08:00:47.016699Z","shell.execute_reply":"2024-06-02T08:00:47.022953Z"},"trusted":true},"execution_count":22,"outputs":[]},{"cell_type":"code","source":"get_audios_as_images(train_df, train = True)\n","metadata":{"papermill":{"duration":4117.309995,"end_time":"2021-04-27T17:26:41.959921","exception":false,"start_time":"2021-04-27T16:18:04.649926","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T08:00:47.025170Z","iopub.execute_input":"2024-06-02T08:00:47.025545Z","iopub.status.idle":"2024-06-02T08:57:35.865341Z","shell.execute_reply.started":"2024-06-02T08:00:47.025511Z","shell.execute_reply":"2024-06-02T08:57:35.864326Z"},"trusted":true},"execution_count":23,"outputs":[{"output_type":"display_data","data":{"text/plain":"  0%|          | 0/19567 [00:00<?, ?it/s]","application/vnd.jupyter.widget-view+json":{"version_major":2,"version_minor":0,"model_id":"a3a786ed82dd4318a14698b11fec85b2"}},"metadata":{}}]},{"cell_type":"code","source":"get_audios_as_images(valid_df, train = False)","metadata":{"execution":{"iopub.status.busy":"2024-06-02T08:57:35.866818Z","iopub.execute_input":"2024-06-02T08:57:35.867134Z","iopub.status.idle":"2024-06-02T09:11:59.884232Z","shell.execute_reply.started":"2024-06-02T08:57:35.867104Z","shell.execute_reply":"2024-06-02T09:11:59.882593Z"},"trusted":true},"execution_count":24,"outputs":[{"output_type":"display_data","data":{"text/plain":"  0%|          | 0/4892 [00:00<?, ?it/s]","application/vnd.jupyter.widget-view+json":{"version_major":2,"version_minor":0,"model_id":"2918f3a7e1ea45d3ab62426ee456ab5d"}},"metadata":{}}]},{"cell_type":"code","source":"import zipfile\nimport os\n\n# Function to zip a folder with high compression\ndef zip_folder_high_compression(folder_path, zip_path):\n    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:\n        for root, dirs, files in os.walk(folder_path):\n            for file in files:\n                file_path = os.path.join(root, file)\n                arcname = os.path.relpath(file_path, start=folder_path)\n                zipf.write(file_path, arcname)\n\n\n# Paths\nfolder_path = '/kaggle/working/specs'\nzip_path = '/kaggle/working/my_folder_high_compression.zip'\n\n# Compress the folder with high compression\nzip_folder_high_compression(folder_path, zip_path)\n\nprint(\"Folder compressed successfully with high compression.\")\n\n# Verify the ZIP file is created\nprint(os.listdir('/kaggle/working/'))\n\n","metadata":{"papermill":{"duration":0.027772,"end_time":"2021-04-27T17:26:42.374518","exception":false,"start_time":"2021-04-27T17:26:42.346746","status":"completed"},"tags":[],"execution":{"iopub.status.busy":"2024-06-02T09:11:59.886452Z","iopub.execute_input":"2024-06-02T09:11:59.887241Z","iopub.status.idle":"2024-06-02T09:22:42.565982Z","shell.execute_reply.started":"2024-06-02T09:11:59.887187Z","shell.execute_reply":"2024-06-02T09:22:42.564902Z"},"trusted":true},"execution_count":25,"outputs":[{"name":"stdout","text":"Folder compressed successfully with high compression.\n['my_folder_high_compression.zip', 'specs', '.virtual_documents']\n","output_type":"stream"}]},{"cell_type":"code","source":"","metadata":{},"execution_count":null,"outputs":[]}]}
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "bd6d5cdb",
+   "metadata": {
+    "papermill": {
+     "duration": 0.011116,
+     "end_time": "2024-06-02T09:32:26.111925",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:26.100809",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# Let's Think of a Better Split Method"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "32d6e036",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:26.132604Z",
+     "iopub.status.busy": "2024-06-02T09:32:26.132213Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.211901Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.210747Z"
+    },
+    "id": "2dt7oG43VAqc",
+    "papermill": {
+     "duration": 1.093292,
+     "end_time": "2024-06-02T09:32:27.214927",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:26.121635",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import librosa as lb\n",
+    "import librosa.display as lbd\n",
+    "import soundfile as sf\n",
+    "from  soundfile import SoundFile\n",
+    "import pandas as pd\n",
+    "from  IPython.display import Audio\n",
+    "from pathlib import Path\n",
+    "\n",
+    "from matplotlib import pyplot as plt\n",
+    "\n",
+    "from tqdm.notebook import tqdm\n",
+    "import joblib, json, re\n",
+    "\n",
+    "from  sklearn.model_selection  import StratifiedKFold\n",
+    "tqdm.pandas()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "af4e4670",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.237512Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.236946Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.440262Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.439286Z"
+    },
+    "papermill": {
+     "duration": 0.216716,
+     "end_time": "2024-06-02T09:32:27.443054",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.226338",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "df = pd.read_csv('/kaggle/input/birdclef-2024/train_metadata.csv')\n",
+    "df['secondary_labels'] = df['secondary_labels'].apply(lambda x: re.findall(r\"'(\\w+)'\", x))\n",
+    "df['len_sec_labels'] = df['secondary_labels'].map(len)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "b8b8e211",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.463281Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.462737Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.492240Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.491269Z"
+    },
+    "papermill": {
+     "duration": 0.042026,
+     "end_time": "2024-06-02T09:32:27.494622",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.452596",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>primary_label</th>\n",
+       "      <th>secondary_labels</th>\n",
+       "      <th>type</th>\n",
+       "      <th>latitude</th>\n",
+       "      <th>longitude</th>\n",
+       "      <th>scientific_name</th>\n",
+       "      <th>common_name</th>\n",
+       "      <th>author</th>\n",
+       "      <th>license</th>\n",
+       "      <th>rating</th>\n",
+       "      <th>url</th>\n",
+       "      <th>filename</th>\n",
+       "      <th>len_sec_labels</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>20948</th>\n",
+       "      <td>rorpar</td>\n",
+       "      <td>[eucdov]</td>\n",
+       "      <td>['call']</td>\n",
+       "      <td>27.1599</td>\n",
+       "      <td>77.5418</td>\n",
+       "      <td>Psittacula krameri</td>\n",
+       "      <td>Rose-ringed Parakeet</td>\n",
+       "      <td>Jelle Scharringa</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>4.5</td>\n",
+       "      <td>http://xeno-canto.org/680459</td>\n",
+       "      <td>rorpar/XC680459.ogg</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>16261</th>\n",
+       "      <td>laudov1</td>\n",
+       "      <td>[houspa]</td>\n",
+       "      <td>['adult', 'song']</td>\n",
+       "      <td>40.1872</td>\n",
+       "      <td>44.5152</td>\n",
+       "      <td>Streptopelia senegalensis</td>\n",
+       "      <td>Laughing Dove</td>\n",
+       "      <td>Vasil Ananian</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>4.5</td>\n",
+       "      <td>https://www.xeno-canto.org/537456</td>\n",
+       "      <td>laudov1/XC537456.ogg</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>21079</th>\n",
+       "      <td>rossta2</td>\n",
+       "      <td>[eucdov]</td>\n",
+       "      <td>['adult', 'call', 'female', 'male', 'song']</td>\n",
+       "      <td>45.6655</td>\n",
+       "      <td>11.4179</td>\n",
+       "      <td>Pastor roseus</td>\n",
+       "      <td>Rosy Starling</td>\n",
+       "      <td>Jessica Peruzzo</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>0.0</td>\n",
+       "      <td>https://www.xeno-canto.org/566754</td>\n",
+       "      <td>rossta2/XC566754.ogg</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "      primary_label secondary_labels  \\\n",
+       "20948        rorpar         [eucdov]   \n",
+       "16261       laudov1         [houspa]   \n",
+       "21079       rossta2         [eucdov]   \n",
+       "\n",
+       "                                              type  latitude  longitude  \\\n",
+       "20948                                     ['call']   27.1599    77.5418   \n",
+       "16261                            ['adult', 'song']   40.1872    44.5152   \n",
+       "21079  ['adult', 'call', 'female', 'male', 'song']   45.6655    11.4179   \n",
+       "\n",
+       "                 scientific_name           common_name            author  \\\n",
+       "20948         Psittacula krameri  Rose-ringed Parakeet  Jelle Scharringa   \n",
+       "16261  Streptopelia senegalensis         Laughing Dove     Vasil Ananian   \n",
+       "21079              Pastor roseus         Rosy Starling   Jessica Peruzzo   \n",
+       "\n",
+       "                                                 license  rating  \\\n",
+       "20948  Creative Commons Attribution-NonCommercial-Sha...     4.5   \n",
+       "16261  Creative Commons Attribution-NonCommercial-Sha...     4.5   \n",
+       "21079  Creative Commons Attribution-NonCommercial-Sha...     0.0   \n",
+       "\n",
+       "                                     url              filename  len_sec_labels  \n",
+       "20948       http://xeno-canto.org/680459   rorpar/XC680459.ogg               1  \n",
+       "16261  https://www.xeno-canto.org/537456  laudov1/XC537456.ogg               1  \n",
+       "21079  https://www.xeno-canto.org/566754  rossta2/XC566754.ogg               1  "
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df[df.len_sec_labels>0].sample(3)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "3a7e17df",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.515175Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.514463Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.528437Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.527469Z"
+    },
+    "papermill": {
+     "duration": 0.027038,
+     "end_time": "2024-06-02T09:32:27.530842",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.503804",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "zitcis1    500\n",
+       "lirplo     500\n",
+       "litgre1    500\n",
+       "comgre     500\n",
+       "comkin1    500\n",
+       "          ... \n",
+       "blaeag1      6\n",
+       "wynlau1      6\n",
+       "niwpig1      5\n",
+       "asiope1      5\n",
+       "integr       5\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 4,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "fffab7af",
+   "metadata": {
+    "papermill": {
+     "duration": 0.009708,
+     "end_time": "2024-06-02T09:32:27.550721",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.541013",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# Something has to be done for Birds with <= 1 samples."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "10818257",
+   "metadata": {
+    "papermill": {
+     "duration": 0.00963,
+     "end_time": "2024-06-02T09:32:27.569834",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.560204",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "## Also the fact that we have to perform inference in 2 hours w/ CPU, I think best solution is just to have single split rather than using multiple folds."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "727fbfe0",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.590653Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.590272Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.599459Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.598369Z"
+    },
+    "papermill": {
+     "duration": 0.022481,
+     "end_time": "2024-06-02T09:32:27.601850",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.579369",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "from sklearn.model_selection import train_test_split\n",
+    "import pandas as pd\n",
+    "\n",
+    "def birds_stratified_split(df, target_col, test_size=0.2):\n",
+    "    class_counts = df[target_col].value_counts()\n",
+    "    low_count_classes = class_counts[class_counts < 2].index.tolist() ### Birds with single counts\n",
+    "\n",
+    "    df['train'] = df[target_col].isin(low_count_classes)\n",
+    "\n",
+    "    train_df, val_df = train_test_split(df[~df['train']], test_size=test_size, stratify=df[~df['train']][target_col], random_state=42)\n",
+    "\n",
+    "    train_df = pd.concat([train_df, df[df['train']]], axis=0).reset_index(drop=True)\n",
+    "\n",
+    "    # Remove the 'valid' column\n",
+    "    train_df.drop('train', axis=1, inplace=True)\n",
+    "    val_df.drop('train', axis=1, inplace=True)\n",
+    "\n",
+    "    return train_df, val_df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "1234195d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.622304Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.622019Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.706108Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.705189Z"
+    },
+    "papermill": {
+     "duration": 0.097036,
+     "end_time": "2024-06-02T09:32:27.708686",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.611650",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "train_df, valid_df = birds_stratified_split(df, 'primary_label', 0.2)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "c3bdfc6a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.729667Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.728785Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.740695Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.739537Z"
+    },
+    "papermill": {
+     "duration": 0.024677,
+     "end_time": "2024-06-02T09:32:27.743004",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.718327",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "zitcis1    500\n",
+       "lirplo     500\n",
+       "litgre1    500\n",
+       "comgre     500\n",
+       "comkin1    500\n",
+       "          ... \n",
+       "blaeag1      6\n",
+       "wynlau1      6\n",
+       "niwpig1      5\n",
+       "asiope1      5\n",
+       "integr       5\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 7,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "394538f5",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.764354Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.763723Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.774409Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.773449Z"
+    },
+    "papermill": {
+     "duration": 0.024023,
+     "end_time": "2024-06-02T09:32:27.776715",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.752692",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "graher1    400\n",
+       "litgre1    400\n",
+       "woosan     400\n",
+       "eurcoo     400\n",
+       "grnsan     400\n",
+       "          ... \n",
+       "wynlau1      5\n",
+       "blaeag1      5\n",
+       "asiope1      4\n",
+       "niwpig1      4\n",
+       "integr       4\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 8,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "train_df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "8cb2c358",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.798135Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.797566Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.806553Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.805579Z"
+    },
+    "papermill": {
+     "duration": 0.022161,
+     "end_time": "2024-06-02T09:32:27.808895",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.786734",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "houspa     100\n",
+       "barswa     100\n",
+       "blrwar1    100\n",
+       "comros     100\n",
+       "graher1    100\n",
+       "          ... \n",
+       "darter2      1\n",
+       "niwpig1      1\n",
+       "bncwoo3      1\n",
+       "blaeag1      1\n",
+       "paisto1      1\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 9,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "valid_df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "572fee75",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.830636Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.830252Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.835753Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.834773Z"
+    },
+    "papermill": {
+     "duration": 0.018854,
+     "end_time": "2024-06-02T09:32:27.837979",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.819125",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class Config:\n",
+    "    sampling_rate = 32000\n",
+    "    duration = 5 \n",
+    "    fmin = 0\n",
+    "    fmax = None\n",
+    "    audios_path = Path(\"/kaggle/input/birdclef-2024/train_audio\")\n",
+    "    out_dir_train = Path(\"specs/train\") \n",
+    "    \n",
+    "    out_dir_valid = Path(\"specs/valid\") \n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "0301f885",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.859112Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.858489Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.863848Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.862890Z"
+    },
+    "papermill": {
+     "duration": 0.018454,
+     "end_time": "2024-06-02T09:32:27.866333",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.847879",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "Config.out_dir_train.mkdir(exist_ok=True, parents=True)\n",
+    "Config.out_dir_valid.mkdir(exist_ok=True, parents=True)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "e53a1f98",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.887961Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.887418Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.893834Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.892757Z"
+    },
+    "papermill": {
+     "duration": 0.019578,
+     "end_time": "2024-06-02T09:32:27.896087",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.876509",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def get_audio_info(filepath):\n",
+    "    \"\"\"Get some properties from  an audio file\"\"\"\n",
+    "    with SoundFile(filepath) as f:\n",
+    "        sr = f.samplerate\n",
+    "        frames = f.frames\n",
+    "        duration = float(frames)/sr\n",
+    "    return {\"frames\": frames, \"sr\": sr, \"duration\": duration}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "1a456bf2",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.918514Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.917668Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.925740Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.924717Z"
+    },
+    "id": "Kmh6xx5_NCjJ",
+    "outputId": "ad61f09f-6f0e-4204-c658-21112e051785",
+    "papermill": {
+     "duration": 0.021491,
+     "end_time": "2024-06-02T09:32:27.928116",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.906625",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def add_path_df(df):\n",
+    "    \n",
+    "    df[\"path\"] = [str(Config.audios_path/filename) for filename in df.filename]\n",
+    "    df = df.reset_index(drop=True)\n",
+    "    pool = joblib.Parallel(2)\n",
+    "    mapper = joblib.delayed(get_audio_info)\n",
+    "    tasks = [mapper(filepath) for filepath in df.path]\n",
+    "    df2 =  pd.DataFrame(pool(tqdm(tasks))).reset_index(drop=True)\n",
+    "    df = pd.concat([df,df2], axis=1).reset_index(drop=True)\n",
+    "\n",
+    "    return df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "7d84a9b0",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.949454Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.949128Z",
+     "iopub.status.idle": "2024-06-02T09:32:27.953984Z",
+     "shell.execute_reply": "2024-06-02T09:32:27.953028Z"
+    },
+    "papermill": {
+     "duration": 0.018312,
+     "end_time": "2024-06-02T09:32:27.956465",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.938153",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "tqdm.pandas()\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "id": "2d26afa4",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:32:27.977784Z",
+     "iopub.status.busy": "2024-06-02T09:32:27.977455Z",
+     "iopub.status.idle": "2024-06-02T09:34:20.937551Z",
+     "shell.execute_reply": "2024-06-02T09:34:20.936512Z"
+    },
+    "papermill": {
+     "duration": 112.9736,
+     "end_time": "2024-06-02T09:34:20.940460",
+     "exception": false,
+     "start_time": "2024-06-02T09:32:27.966860",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "3d4433e80ec24c69b7c00bca822aea9e",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/19567 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "train_df = add_path_df(train_df)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "id": "e1242f31",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:20.964273Z",
+     "iopub.status.busy": "2024-06-02T09:34:20.963477Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.260125Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.259062Z"
+    },
+    "papermill": {
+     "duration": 27.311812,
+     "end_time": "2024-06-02T09:34:48.263352",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:20.951540",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "c73b517d7db243b28baf380a9286f340",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/4892 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "valid_df = add_path_df(valid_df)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "9fc8fc5f",
+   "metadata": {
+    "papermill": {
+     "duration": 0.010404,
+     "end_time": "2024-06-02T09:34:48.285605",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.275201",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "id": "1bf8e190",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.308536Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.307879Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.321309Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.320147Z"
+    },
+    "papermill": {
+     "duration": 0.027623,
+     "end_time": "2024-06-02T09:34:48.323791",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.296168",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "count    19567.000000\n",
+       "mean        41.858233\n",
+       "std         98.451733\n",
+       "min          0.470000\n",
+       "25%         11.180406\n",
+       "50%         22.230219\n",
+       "75%         44.564906\n",
+       "max       4670.641625\n",
+       "Name: duration, dtype: float64"
+      ]
+     },
+     "execution_count": 17,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "train_df[\"duration\"].describe()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "id": "5c8d5dd1",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.346736Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.346128Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.352747Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.351633Z"
+    },
+    "papermill": {
+     "duration": 0.020517,
+     "end_time": "2024-06-02T09:34:48.355047",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.334530",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def compute_melspec(y, sr, n_mels, fmin, fmax):\n",
+    "    \"\"\"\n",
+    "    Computes a mel-spectrogram and puts it at decibel scale\n",
+    "    Arguments:\n",
+    "        y {np array} -- signal\n",
+    "        params {AudioParams} -- Parameters to use for the spectrogram. Expected to have the attributes sr, n_mels, f_min, f_max\n",
+    "    Returns:\n",
+    "        np array -- Mel-spectrogram\n",
+    "    \"\"\"\n",
+    "    melspec = lb.feature.melspectrogram(\n",
+    "        y=y, sr=sr, n_mels=n_mels, fmin=fmin, fmax=fmax,\n",
+    "    )\n",
+    "\n",
+    "    melspec = lb.power_to_db(melspec).astype(np.float32)\n",
+    "    return melspec"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 19,
+   "id": "eec62491",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.377222Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.376658Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.388560Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.387797Z"
+    },
+    "id": "-Nlw4E5UVAqi",
+    "papermill": {
+     "duration": 0.025667,
+     "end_time": "2024-06-02T09:34:48.390909",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.365242",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def mono_to_color(X, eps=1e-6, mean=None, std=None):\n",
+    "    mean = mean or X.mean()\n",
+    "    std = std or X.std()\n",
+    "    X = (X - mean) / (std + eps)\n",
+    "    \n",
+    "    _min, _max = X.min(), X.max()\n",
+    "\n",
+    "    if (_max - _min) > eps:\n",
+    "        V = np.clip(X, _min, _max)\n",
+    "        V = 255 * (V - _min) / (_max - _min)\n",
+    "        V = V.astype(np.uint8)\n",
+    "    else:\n",
+    "        V = np.zeros_like(X, dtype=np.uint8)\n",
+    "\n",
+    "    return V\n",
+    "\n",
+    "def crop_or_pad(y, length, is_train=True, start=None):\n",
+    "    if len(y) < length:\n",
+    "        y = np.concatenate([y, np.zeros(length - len(y))])\n",
+    "        \n",
+    "        n_repeats = length // len(y)\n",
+    "        epsilon = length % len(y)\n",
+    "        \n",
+    "        y = np.concatenate([y]*n_repeats + [y[:epsilon]])\n",
+    "        \n",
+    "    elif len(y) > length:\n",
+    "        if not is_train:\n",
+    "            start = start or 0\n",
+    "        else:\n",
+    "            start = start or np.random.randint(len(y) - length)\n",
+    "\n",
+    "        y = y[start:start + length]\n",
+    "\n",
+    "    return y"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "bf3882e8",
+   "metadata": {
+    "papermill": {
+     "duration": 0.010614,
+     "end_time": "2024-06-02T09:34:48.411900",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.401286",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 20,
+   "id": "e8fd4aa7",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.433665Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.433304Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.448137Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.447228Z"
+    },
+    "papermill": {
+     "duration": 0.028492,
+     "end_time": "2024-06-02T09:34:48.450540",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.422048",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class AudioToImage:\n",
+    "    def __init__(self, sr=Config.sampling_rate, n_mels=128, fmin=Config.fmin, fmax=Config.fmax, duration=Config.duration, step=None, res_type=\"kaiser_fast\", resample=True, train = True):\n",
+    "\n",
+    "        self.sr = sr\n",
+    "        self.n_mels = n_mels\n",
+    "        self.fmin = fmin\n",
+    "        self.fmax = fmax or self.sr//2\n",
+    "\n",
+    "        self.duration = duration\n",
+    "        self.audio_length = self.duration*self.sr\n",
+    "        self.step = step or self.audio_length\n",
+    "        \n",
+    "        self.res_type = res_type\n",
+    "        self.resample = resample\n",
+    "\n",
+    "        self.train = train\n",
+    "    def audio_to_image(self, audio):\n",
+    "        melspec = compute_melspec(audio, self.sr, self.n_mels, self.fmin, self.fmax ) \n",
+    "        image = mono_to_color(melspec)\n",
+    "#         compute_melspec(y, sr, n_mels, fmin, fmax)\n",
+    "        return image\n",
+    "\n",
+    "    def __call__(self, row, save=True):\n",
+    "\n",
+    "      audio, orig_sr = sf.read(row.path, dtype=\"float32\")\n",
+    "\n",
+    "      if self.resample and orig_sr != self.sr:\n",
+    "        audio = lb.resample(audio, orig_sr, self.sr, res_type=self.res_type)\n",
+    "        \n",
+    "      audios = [audio[i:i+self.audio_length] for i in range(0, max(1, len(audio) - self.audio_length + 1), self.step)]\n",
+    "      audios[-1] = crop_or_pad(audios[-1] , length=self.audio_length)\n",
+    "      images = [self.audio_to_image(audio) for audio in audios]\n",
+    "      images = np.stack(images)\n",
+    "        \n",
+    "      if save:\n",
+    "        if self.train:\n",
+    "            path = Config.out_dir_train/f\"{row.filename}.npy\"\n",
+    "        else:\n",
+    "            path = Config.out_dir_valid/f\"{row.filename}.npy\"\n",
+    "            \n",
+    "        path.parent.mkdir(exist_ok=True, parents=True)\n",
+    "        np.save(str(path), images)\n",
+    "      else:\n",
+    "        return  row.filename, images"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 21,
+   "id": "3a6c1c86",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.473402Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.472907Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.477950Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.476938Z"
+    },
+    "papermill": {
+     "duration": 0.01901,
+     "end_time": "2024-06-02T09:34:48.480317",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.461307",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "tqdm.pandas()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 22,
+   "id": "366f5be2",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.502567Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.501897Z",
+     "iopub.status.idle": "2024-06-02T09:34:48.508307Z",
+     "shell.execute_reply": "2024-06-02T09:34:48.507351Z"
+    },
+    "papermill": {
+     "duration": 0.019786,
+     "end_time": "2024-06-02T09:34:48.510551",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.490765",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def get_audios_as_images(df, train = True):\n",
+    "    pool = joblib.Parallel(2)\n",
+    "    \n",
+    "    converter = AudioToImage(step=int(Config.duration*0.666*Config.sampling_rate),train=train)\n",
+    "    mapper = joblib.delayed(converter)\n",
+    "    tasks = [mapper(row) for row in df.itertuples(False)]\n",
+    "    pool(tqdm(tasks))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 23,
+   "id": "2813be54",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T09:34:48.532695Z",
+     "iopub.status.busy": "2024-06-02T09:34:48.532199Z",
+     "iopub.status.idle": "2024-06-02T10:35:50.898877Z",
+     "shell.execute_reply": "2024-06-02T10:35:50.897625Z"
+    },
+    "papermill": {
+     "duration": 3662.381327,
+     "end_time": "2024-06-02T10:35:50.901923",
+     "exception": false,
+     "start_time": "2024-06-02T09:34:48.520596",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "f6ea277c88b84f3b9ca0494293e011ce",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/19567 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "get_audios_as_images(train_df, train = True)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "id": "fabffd72",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T10:35:50.925469Z",
+     "iopub.status.busy": "2024-06-02T10:35:50.925083Z",
+     "iopub.status.idle": "2024-06-02T10:51:06.238653Z",
+     "shell.execute_reply": "2024-06-02T10:51:06.237275Z"
+    },
+    "papermill": {
+     "duration": 915.32901,
+     "end_time": "2024-06-02T10:51:06.242144",
+     "exception": false,
+     "start_time": "2024-06-02T10:35:50.913134",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "ca4952beed91448cb1232aac1376aa17",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/4892 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "get_audios_as_images(valid_df, train = False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 25,
+   "id": "02e726f9",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T10:51:06.267608Z",
+     "iopub.status.busy": "2024-06-02T10:51:06.266721Z",
+     "iopub.status.idle": "2024-06-02T11:02:14.605539Z",
+     "shell.execute_reply": "2024-06-02T11:02:14.604370Z"
+    },
+    "papermill": {
+     "duration": 668.365454,
+     "end_time": "2024-06-02T11:02:14.619354",
+     "exception": false,
+     "start_time": "2024-06-02T10:51:06.253900",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Folder compressed successfully with high compression.\n",
+      "['my_folder_high_compression.zip', 'specs', '__notebook__.ipynb']\n"
+     ]
+    }
+   ],
+   "source": [
+    "import zipfile\n",
+    "import os\n",
+    "\n",
+    "# Function to zip a folder with high compression\n",
+    "def zip_folder_high_compression(folder_path, zip_path):\n",
+    "    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:\n",
+    "        for root, dirs, files in os.walk(folder_path):\n",
+    "            for file in files:\n",
+    "                file_path = os.path.join(root, file)\n",
+    "                arcname = os.path.relpath(file_path, start=folder_path)\n",
+    "                zipf.write(file_path, arcname)\n",
+    "\n",
+    "\n",
+    "# Paths\n",
+    "folder_path = '/kaggle/working/specs'\n",
+    "zip_path = '/kaggle/working/my_folder_high_compression.zip'\n",
+    "\n",
+    "# Compress the folder with high compression\n",
+    "zip_folder_high_compression(folder_path, zip_path)\n",
+    "\n",
+    "print(\"Folder compressed successfully with high compression.\")\n",
+    "\n",
+    "# Verify the ZIP file is created\n",
+    "print(os.listdir('/kaggle/working/'))\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "3a367859",
+   "metadata": {
+    "papermill": {
+     "duration": 0.010914,
+     "end_time": "2024-06-02T11:02:14.643051",
+     "exception": false,
+     "start_time": "2024-06-02T11:02:14.632137",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "nvidiaTeslaT4",
+   "dataSources": [
+    {
+     "databundleVersionId": 8068726,
+     "sourceId": 70203,
+     "sourceType": "competition"
+    }
+   ],
+   "dockerImageVersionId": 30407,
+   "isGpuEnabled": true,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.12"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 5402.37713,
+   "end_time": "2024-06-02T11:02:17.292314",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2024-06-02T09:32:14.915184",
+   "version": "2.4.0"
+  },
+  "widgets": {
+   "application/vnd.jupyter.widget-state+json": {
+    "state": {
+     "01aaf947678a410dacdf6c1cb3931232": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "02853f4a47aa4f70850000432e0380a2": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "039e96f969aa4906ab9514ef67285589": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_02853f4a47aa4f70850000432e0380a2",
+       "max": 4892.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_9bf170de494a4c2cbb90203437730f6e",
+       "value": 4892.0
+      }
+     },
+     "1188ba29171647feafb0b7c0e9023554": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_01aaf947678a410dacdf6c1cb3931232",
+       "placeholder": "​",
+       "style": "IPY_MODEL_47ae976ccbef4dc48db4c26661cc1ccc",
+       "value": " 19567/19567 [1:01:01&lt;00:00,  6.73it/s]"
+      }
+     },
+     "1a49200eab9d4bca89a4531f149d7dd6": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "1b565c3e525045ba82758469f10770d6": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "1e35716d144b41ccbdea5bc6797af8e5": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "2705d97a2ca344b684ae3339ebf004af": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_8092e37e47d84f33a14c96040c98eb92",
+       "placeholder": "​",
+       "style": "IPY_MODEL_1b565c3e525045ba82758469f10770d6",
+       "value": "100%"
+      }
+     },
+     "2af0845bf8e44ec8a2ddcf3faee415dd": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "3bb2d28fcf0d474cacd7f7bf9917ef24": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_541547d4e7d04d328bb10d2fd5050d3a",
+       "max": 19567.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_716ad052fb654a6e91074fa8c2c009e1",
+       "value": 19567.0
+      }
+     },
+     "3d4433e80ec24c69b7c00bca822aea9e": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_4a6499e16f014a0d901d5c83f3c94589",
+        "IPY_MODEL_d2b6926a104245c89a33fb4e766e8adc",
+        "IPY_MODEL_86f0669be95047cfa1d0f644546e2a3d"
+       ],
+       "layout": "IPY_MODEL_a5a5d667c79c48e38d0a959690195e98"
+      }
+     },
+     "4042b60f22f442a6bd9aaf9bfea8da60": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "47ae976ccbef4dc48db4c26661cc1ccc": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "4987f2d4e81843aea9eee5c3a80b1fd3": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_b0c2cda1a95e4ba68c7e893e7f61d5b0",
+       "placeholder": "​",
+       "style": "IPY_MODEL_a3efe3a179a748b5b91e511044b2df8e",
+       "value": " 4892/4892 [00:26&lt;00:00, 149.39it/s]"
+      }
+     },
+     "4a6499e16f014a0d901d5c83f3c94589": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_c0b11ffa05514d9cbd0b2d15b9a10b79",
+       "placeholder": "​",
+       "style": "IPY_MODEL_1a49200eab9d4bca89a4531f149d7dd6",
+       "value": "100%"
+      }
+     },
+     "541547d4e7d04d328bb10d2fd5050d3a": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "67bad87f9e874739aa50ab43cb6cae7b": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "716ad052fb654a6e91074fa8c2c009e1": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "7d0a03aec3654444b04783a767dcb1b2": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "8092e37e47d84f33a14c96040c98eb92": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "86f0669be95047cfa1d0f644546e2a3d": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_c8d7b19deb65482e8b3390df4d420e8e",
+       "placeholder": "​",
+       "style": "IPY_MODEL_f66a387ad041457a8f1715ee1186f4e9",
+       "value": " 19567/19567 [01:52&lt;00:00, 175.36it/s]"
+      }
+     },
+     "9bf170de494a4c2cbb90203437730f6e": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "9ea608e7f65b4af2aa59b571337d93ee": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_67bad87f9e874739aa50ab43cb6cae7b",
+       "max": 4892.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_db119cd9208a4258b34f693b29ccc9ee",
+       "value": 4892.0
+      }
+     },
+     "a3efe3a179a748b5b91e511044b2df8e": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "a5a5d667c79c48e38d0a959690195e98": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "a8e4914b5003467aa7ed5feda2e165af": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "b0c2cda1a95e4ba68c7e893e7f61d5b0": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "b4b7276732b84ca8a2a86ca379e54136": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_f11cd1e211744c7aa6b68a8068df1fe3",
+       "placeholder": "​",
+       "style": "IPY_MODEL_4042b60f22f442a6bd9aaf9bfea8da60",
+       "value": "100%"
+      }
+     },
+     "c0b11ffa05514d9cbd0b2d15b9a10b79": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "c73b517d7db243b28baf380a9286f340": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_2705d97a2ca344b684ae3339ebf004af",
+        "IPY_MODEL_9ea608e7f65b4af2aa59b571337d93ee",
+        "IPY_MODEL_4987f2d4e81843aea9eee5c3a80b1fd3"
+       ],
+       "layout": "IPY_MODEL_f5dec3dcb0a9418d9a80a720ae4c8690"
+      }
+     },
+     "c8d7b19deb65482e8b3390df4d420e8e": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "ca4952beed91448cb1232aac1376aa17": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_d3bbc29f205e4e38a47aa66d215da768",
+        "IPY_MODEL_039e96f969aa4906ab9514ef67285589",
+        "IPY_MODEL_cc86b6ab92ca4de6b38613eb4d8eddf3"
+       ],
+       "layout": "IPY_MODEL_1e35716d144b41ccbdea5bc6797af8e5"
+      }
+     },
+     "cc86b6ab92ca4de6b38613eb4d8eddf3": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_fbbd2645adb5413eaee8e72d62ab6b37",
+       "placeholder": "​",
+       "style": "IPY_MODEL_ee771594463b4504ae8d2e5e90c8a0e2",
+       "value": " 4892/4892 [15:12&lt;00:00,  3.03it/s]"
+      }
+     },
+     "d2b6926a104245c89a33fb4e766e8adc": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_decfb00a6307455595f48e8dd8030bab",
+       "max": 19567.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_a8e4914b5003467aa7ed5feda2e165af",
+       "value": 19567.0
+      }
+     },
+     "d3bbc29f205e4e38a47aa66d215da768": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_eb2680e3b345457ea7c4a530a110689e",
+       "placeholder": "​",
+       "style": "IPY_MODEL_2af0845bf8e44ec8a2ddcf3faee415dd",
+       "value": "100%"
+      }
+     },
+     "db119cd9208a4258b34f693b29ccc9ee": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "decfb00a6307455595f48e8dd8030bab": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "eb2680e3b345457ea7c4a530a110689e": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "ee771594463b4504ae8d2e5e90c8a0e2": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "f11cd1e211744c7aa6b68a8068df1fe3": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "f5dec3dcb0a9418d9a80a720ae4c8690": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "f66a387ad041457a8f1715ee1186f4e9": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "f6ea277c88b84f3b9ca0494293e011ce": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_b4b7276732b84ca8a2a86ca379e54136",
+        "IPY_MODEL_3bb2d28fcf0d474cacd7f7bf9917ef24",
+        "IPY_MODEL_1188ba29171647feafb0b7c0e9023554"
+       ],
+       "layout": "IPY_MODEL_7d0a03aec3654444b04783a767dcb1b2"
+      }
+     },
+     "fbbd2645adb5413eaee8e72d62ab6b37": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     }
+    },
+    "version_major": 2,
+    "version_minor": 0
+   }
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
