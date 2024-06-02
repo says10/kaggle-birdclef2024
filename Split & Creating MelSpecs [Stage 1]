@@ -1,1 +1,2599 @@
-{"metadata":{"kernelspec":{"language":"python","display_name":"Python 3","name":"python3"},"language_info":{"name":"python","version":"3.7.12","mimetype":"text/x-python","codemirror_mode":{"name":"ipython","version":3},"pygments_lexer":"ipython3","nbconvert_exporter":"python","file_extension":".py"},"kaggle":{"accelerator":"nvidiaTeslaT4","dataSources":[{"sourceId":70203,"databundleVersionId":8068726,"sourceType":"competition"}],"dockerImageVersionId":30407,"isInternetEnabled":true,"language":"python","sourceType":"notebook","isGpuEnabled":true}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"markdown","source":"# Let's Think of a Better Split Method","metadata":{"papermill":{"duration":0.018531,"end_time":"2021-04-27T16:16:17.44056","exception":false,"start_time":"2021-04-27T16:16:17.422029","status":"completed"},"tags":[]}},{"cell_type":"code","source":"import numpy as np\nimport librosa as lb\nimport librosa.display as lbd\nimport soundfile as sf\nfrom  soundfile import SoundFile\nimport pandas as pd\nfrom  IPython.display import Audio\nfrom pathlib import Path\n\nfrom matplotlib import pyplot as plt\n\nfrom tqdm.notebook import tqdm\nimport joblib, json, re\n\nfrom  sklearn.model_selection  import StratifiedKFold\ntqdm.pandas()","metadata":{"id":"2dt7oG43VAqc","papermill":{"duration":2.637633,"end_time":"2021-04-27T16:16:20.164867","exception":false,"start_time":"2021-04-27T16:16:17.527234","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"df = pd.read_csv('/kaggle/input/birdclef-2024/train_metadata.csv')\ndf['secondary_labels'] = df['secondary_labels'].apply(lambda x: re.findall(r\"'(\\w+)'\", x))\ndf['len_sec_labels'] = df['secondary_labels'].map(len)\n","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"df[df.len_sec_labels>0].sample(3)","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"df.primary_label.value_counts()","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"# Something has to be done for Birds with <= 1 samples.","metadata":{}},{"cell_type":"markdown","source":"## Also the fact that we have to perform inference in 2 hours w/ CPU, I think best solution is just to have single split rather than using multiple folds.","metadata":{}},{"cell_type":"code","source":"from sklearn.model_selection import train_test_split\nimport pandas as pd\n\ndef birds_stratified_split(df, target_col, test_size=0.2):\n    class_counts = df[target_col].value_counts()\n    low_count_classes = class_counts[class_counts < 2].index.tolist() ### Birds with single counts\n\n    df['train'] = df[target_col].isin(low_count_classes)\n\n    train_df, val_df = train_test_split(df[~df['train']], test_size=test_size, stratify=df[~df['train']][target_col], random_state=42)\n\n    train_df = pd.concat([train_df, df[df['train']]], axis=0).reset_index(drop=True)\n\n    # Remove the 'valid' column\n    train_df.drop('train', axis=1, inplace=True)\n    val_df.drop('train', axis=1, inplace=True)\n\n    return train_df, val_df","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"train_df, valid_df = birds_stratified_split(df, 'primary_label', 0.2)","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"df.primary_label.value_counts()","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"train_df.primary_label.value_counts()","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"valid_df.primary_label.value_counts()","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"class Config:\n    sampling_rate = 32000\n    duration = 5 \n    fmin = 0\n    fmax = None\n    audios_path = Path(\"/kaggle/input/birdclef-2024/train_audio\")\n    out_dir_train = Path(\"specs/train\") \n    \n    out_dir_valid = Path(\"specs/valid\") \n","metadata":{"papermill":{"duration":0.027531,"end_time":"2021-04-27T16:16:20.271347","exception":false,"start_time":"2021-04-27T16:16:20.243816","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"Config.out_dir_train.mkdir(exist_ok=True, parents=True)\nConfig.out_dir_valid.mkdir(exist_ok=True, parents=True)","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"def get_audio_info(filepath):\n    \"\"\"Get some properties from  an audio file\"\"\"\n    with SoundFile(filepath) as f:\n        sr = f.samplerate\n        frames = f.frames\n        duration = float(frames)/sr\n    return {\"frames\": frames, \"sr\": sr, \"duration\": duration}","metadata":{"papermill":{"duration":0.026875,"end_time":"2021-04-27T16:16:20.351194","exception":false,"start_time":"2021-04-27T16:16:20.324319","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"def add_path_df(df):\n    \n    df[\"path\"] = [str(Config.audios_path/filename) for filename in df.filename]\n    df = df.reset_index(drop=True)\n    pool = joblib.Parallel(2)\n    mapper = joblib.delayed(get_audio_info)\n    tasks = [mapper(filepath) for filepath in df.path]\n    df2 =  pd.DataFrame(pool(tqdm(tasks))).reset_index(drop=True)\n    df = pd.concat([df,df2], axis=1).reset_index(drop=True)\n\n    return df","metadata":{"id":"Kmh6xx5_NCjJ","outputId":"ad61f09f-6f0e-4204-c658-21112e051785","papermill":{"duration":0.031496,"end_time":"2021-04-27T16:16:20.401055","exception":false,"start_time":"2021-04-27T16:16:20.369559","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"tqdm.pandas()\n","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"train_df = add_path_df(train_df)","metadata":{"papermill":{"duration":0.017674,"end_time":"2021-04-27T16:16:20.436943","exception":false,"start_time":"2021-04-27T16:16:20.419269","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"valid_df = add_path_df(valid_df)","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"train_df[\"duration\"].describe()","metadata":{"papermill":{"duration":0.257618,"end_time":"2021-04-27T16:18:04.144335","exception":false,"start_time":"2021-04-27T16:18:03.886717","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"def compute_melspec(y, sr, n_mels, fmin, fmax):\n    \"\"\"\n    Computes a mel-spectrogram and puts it at decibel scale\n    Arguments:\n        y {np array} -- signal\n        params {AudioParams} -- Parameters to use for the spectrogram. Expected to have the attributes sr, n_mels, f_min, f_max\n    Returns:\n        np array -- Mel-spectrogram\n    \"\"\"\n    melspec = lb.feature.melspectrogram(\n        y=y, sr=sr, n_mels=n_mels, fmin=fmin, fmax=fmax,\n    )\n\n    melspec = lb.power_to_db(melspec).astype(np.float32)\n    return melspec","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"def mono_to_color(X, eps=1e-6, mean=None, std=None):\n    mean = mean or X.mean()\n    std = std or X.std()\n    X = (X - mean) / (std + eps)\n    \n    _min, _max = X.min(), X.max()\n\n    if (_max - _min) > eps:\n        V = np.clip(X, _min, _max)\n        V = 255 * (V - _min) / (_max - _min)\n        V = V.astype(np.uint8)\n    else:\n        V = np.zeros_like(X, dtype=np.uint8)\n\n    return V\n\ndef crop_or_pad(y, length, is_train=True, start=None):\n    if len(y) < length:\n        y = np.concatenate([y, np.zeros(length - len(y))])\n        \n        n_repeats = length // len(y)\n        epsilon = length % len(y)\n        \n        y = np.concatenate([y]*n_repeats + [y[:epsilon]])\n        \n    elif len(y) > length:\n        if not is_train:\n            start = start or 0\n        else:\n            start = start or np.random.randint(len(y) - length)\n\n        y = y[start:start + length]\n\n    return y","metadata":{"id":"-Nlw4E5UVAqi","papermill":{"duration":0.036932,"end_time":"2021-04-27T16:18:04.507902","exception":false,"start_time":"2021-04-27T16:18:04.47097","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"","metadata":{},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"class AudioToImage:\n    def __init__(self, sr=Config.sampling_rate, n_mels=128, fmin=Config.fmin, fmax=Config.fmax, duration=Config.duration, step=None, res_type=\"kaiser_fast\", resample=True, train = True):\n\n        self.sr = sr\n        self.n_mels = n_mels\n        self.fmin = fmin\n        self.fmax = fmax or self.sr//2\n\n        self.duration = duration\n        self.audio_length = self.duration*self.sr\n        self.step = step or self.audio_length\n        \n        self.res_type = res_type\n        self.resample = resample\n\n        self.train = train\n    def audio_to_image(self, audio):\n        melspec = compute_melspec(audio, self.sr, self.n_mels, self.fmin, self.fmax ) \n        image = mono_to_color(melspec)\n#         compute_melspec(y, sr, n_mels, fmin, fmax)\n        return image\n\n    def __call__(self, row, save=True):\n\n      audio, orig_sr = sf.read(row.path, dtype=\"float32\")\n\n      if self.resample and orig_sr != self.sr:\n        audio = lb.resample(audio, orig_sr, self.sr, res_type=self.res_type)\n        \n      audios = [audio[i:i+self.audio_length] for i in range(0, max(1, len(audio) - self.audio_length + 1), self.step)]\n      audios[-1] = crop_or_pad(audios[-1] , length=self.audio_length)\n      images = [self.audio_to_image(audio) for audio in audios]\n      images = np.stack(images)\n        \n      if save:\n        if self.train:\n            path = Config.out_dir_train/f\"{row.filename}.npy\"\n        else:\n            path = Config.out_dir_valid/f\"{row.filename}.npy\"\n            \n        path.parent.mkdir(exist_ok=True, parents=True)\n        np.save(str(path), images)\n      else:\n        return  row.filename, images","metadata":{"papermill":{"duration":0.039542,"end_time":"2021-04-27T16:18:04.570629","exception":false,"start_time":"2021-04-27T16:18:04.531087","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"tqdm.pandas()","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"def get_audios_as_images(df, train = True):\n    pool = joblib.Parallel(2)\n    \n    converter = AudioToImage(step=int(Config.duration*0.666*Config.sampling_rate),train=train)\n    mapper = joblib.delayed(converter)\n    tasks = [mapper(row) for row in df.itertuples(False)]\n    pool(tqdm(tasks))","metadata":{"papermill":{"duration":0.032362,"end_time":"2021-04-27T16:18:04.626619","exception":false,"start_time":"2021-04-27T16:18:04.594257","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"get_audios_as_images(train_df, train = True)\n","metadata":{"papermill":{"duration":4117.309995,"end_time":"2021-04-27T17:26:41.959921","exception":false,"start_time":"2021-04-27T16:18:04.649926","status":"completed"},"tags":[],"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"get_audios_as_images(valid_df, train = False)","metadata":{"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"!zip -r output.zip ./","metadata":{"papermill":{"duration":0.027772,"end_time":"2021-04-27T17:26:42.374518","exception":false,"start_time":"2021-04-27T17:26:42.346746","status":"completed"},"tags":[],"execution":{"iopub.status.idle":"2024-06-02T07:32:01.969650Z","shell.execute_reply.started":"2024-06-02T07:23:32.558295Z","shell.execute_reply":"2024-06-02T07:32:01.968474Z"},"trusted":true},"execution_count":25,"outputs":[{"name":"stdout","text":" (deflated 29%)\n  adding: specs/train/whrmun/XC658739.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC654215.ogg.npy (deflated 20%)\n  adding: specs/train/whrmun/XC770525.ogg.npy (deflated 16%)\n  adding: specs/train/whrmun/XC777035.ogg.npy (deflated 18%)\n  adding: specs/train/whrmun/XC711703.ogg.npy (deflated 23%)\n  adding: specs/train/whrmun/XC778724.ogg.npy (deflated 24%)\n  adding: specs/train/whrmun/XC757131.ogg.npy (deflated 13%)\n  adding: specs/train/whrmun/XC447365.ogg.npy (deflated 18%)\n  adding: specs/train/whrmun/XC757201.ogg.npy (deflated 14%)\n  adding: specs/train/whrmun/XC853724.ogg.npy (deflated 19%)\n  adding: specs/train/whrmun/XC399232.ogg.npy (deflated 16%)\n  adding: specs/train/whrmun/XC840195.ogg.npy (deflated 19%)\n  adding: specs/train/whrmun/XC853726.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC757204.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC112562.ogg.npy (deflated 18%)\n  adding: specs/train/whrmun/XC753813.ogg.npy (deflated 14%)\n  adding: specs/train/whrmun/XC776543.ogg.npy (deflated 21%)\n  adding: specs/train/whrmun/XC711689.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC809320.ogg.npy (deflated 16%)\n  adding: specs/train/whrmun/XC176319.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC778691.ogg.npy (deflated 24%)\n  adding: specs/train/whrmun/XC773397.ogg.npy (deflated 19%)\n  adding: specs/train/whrmun/XC307304.ogg.npy (deflated 13%)\n  adding: specs/train/whrmun/XC399209.ogg.npy (deflated 22%)\n  adding: specs/train/whrmun/XC406887.ogg.npy (deflated 23%)\n  adding: specs/train/whrmun/XC766566.ogg.npy (deflated 13%)\n  adding: specs/train/whrmun/XC151218.ogg.npy (deflated 15%)\n  adding: specs/train/whrmun/XC766421.ogg.npy (deflated 16%)\n  adding: specs/train/whrmun/XC725828.ogg.npy (deflated 21%)\n  adding: specs/train/whrmun/XC711543.ogg.npy (deflated 32%)\n  adding: specs/train/whrmun/XC401438.ogg.npy (deflated 22%)\n  adding: specs/train/whrmun/XC774288.ogg.npy (deflated 17%)\n  adding: specs/train/whrmun/XC176317.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/ (stored 0%)\n  adding: specs/train/rewlap1/XC335664.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC507724.ogg.npy (deflated 21%)\n  adding: specs/train/rewlap1/XC570429.ogg.npy (deflated 21%)\n  adding: specs/train/rewlap1/XC407852.ogg.npy (deflated 20%)\n  adding: specs/train/rewlap1/XC399744.ogg.npy (deflated 22%)\n  adding: specs/train/rewlap1/XC425041.ogg.npy (deflated 23%)\n  adding: specs/train/rewlap1/XC357929.ogg.npy (deflated 21%)\n  adding: specs/train/rewlap1/XC404493.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC330916.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC116836.ogg.npy (deflated 74%)\n  adding: specs/train/rewlap1/XC386793.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC590070.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC208798.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC74221.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC690229.ogg.npy (deflated 50%)\n  adding: specs/train/rewlap1/XC665479.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC135155.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC461631.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC732874.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC209017.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC446881.ogg.npy (deflated 36%)\n  adding: specs/train/rewlap1/XC405306.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC319016.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC318466.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC447637.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC579399.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC606445.ogg.npy (deflated 66%)\n  adding: specs/train/rewlap1/XC815135.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC178464.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC713231.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC606961.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC402238.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC215439.ogg.npy (deflated 22%)\n  adding: specs/train/rewlap1/XC381368.ogg.npy (deflated 28%)\n  adding: specs/train/rewlap1/XC857731.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC639945.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC665480.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC403964.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC358150.ogg.npy (deflated 9%)\n  adding: specs/train/rewlap1/XC317385.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC74222.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC540967.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC577353.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC686926.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC399740.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC277453.ogg.npy (deflated 10%)\n  adding: specs/train/rewlap1/XC560507.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC368211.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC777643.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC483703.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC173180.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC531068.ogg.npy (deflated 10%)\n  adding: specs/train/rewlap1/XC302080.ogg.npy (deflated 9%)\n  adding: specs/train/rewlap1/XC362840.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC118198.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC288092.ogg.npy (deflated 66%)\n  adding: specs/train/rewlap1/XC367975.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC531477.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC295443.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC756441.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC573515.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC481294.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC802187.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC74218.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC359247.ogg.npy (deflated 44%)\n  adding: specs/train/rewlap1/XC391987.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC686929.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC181980.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC37585.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC446884.ogg.npy (deflated 31%)\n  adding: specs/train/rewlap1/XC544180.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC484175.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC733008.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC684869.ogg.npy (deflated 22%)\n  adding: specs/train/rewlap1/XC665907.ogg.npy (deflated 22%)\n  adding: specs/train/rewlap1/XC439730.ogg.npy (deflated 16%)\n  adding: specs/train/rewlap1/XC118196.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC514071.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC446880.ogg.npy (deflated 36%)\n  adding: specs/train/rewlap1/XC572651.ogg.npy (deflated 31%)\n  adding: specs/train/rewlap1/XC577351.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC296422.ogg.npy (deflated 72%)\n  adding: specs/train/rewlap1/XC613965.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC844126.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC510665.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC509587.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC652830.ogg.npy (deflated 14%)\n  adding: specs/train/rewlap1/XC783722.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC665908.ogg.npy (deflated 20%)\n  adding: specs/train/rewlap1/XC510664.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC400330.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC416117.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC392131.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC808318.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC464047.ogg.npy (deflated 13%)\n  adding: specs/train/rewlap1/XC151307.ogg.npy (deflated 17%)\n  adding: specs/train/rewlap1/XC462257.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC394047.ogg.npy (deflated 36%)\n  adding: specs/train/rewlap1/XC74223.ogg.npy (deflated 20%)\n  adding: specs/train/rewlap1/XC223656.ogg.npy (deflated 10%)\n  adding: specs/train/rewlap1/XC74220.ogg.npy (deflated 28%)\n  adding: specs/train/rewlap1/XC209222.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC310872.ogg.npy (deflated 19%)\n  adding: specs/train/rewlap1/XC196952.ogg.npy (deflated 11%)\n  adding: specs/train/rewlap1/XC363625.ogg.npy (deflated 12%)\n  adding: specs/train/rewlap1/XC379632.ogg.npy (deflated 15%)\n  adding: specs/train/rewlap1/XC74224.ogg.npy (deflated 18%)\n  adding: specs/train/rewlap1/XC825813.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/ (stored 0%)\n  adding: specs/train/aspfly1/XC520167.ogg.npy (deflated 70%)\n  adding: specs/train/aspfly1/XC687957.ogg.npy (deflated 76%)\n  adding: specs/train/aspfly1/XC404472.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/XC157482.ogg.npy (deflated 16%)\n  adding: specs/train/aspfly1/XC217785.ogg.npy (deflated 15%)\n  adding: specs/train/aspfly1/XC523459.ogg.npy (deflated 12%)\n  adding: specs/train/aspfly1/XC687959.ogg.npy (deflated 18%)\n  adding: specs/train/aspfly1/XC687956.ogg.npy (deflated 15%)\n  adding: specs/train/aspfly1/XC195086.ogg.npy (deflated 47%)\n  adding: specs/train/aspfly1/XC288095.ogg.npy (deflated 42%)\n  adding: specs/train/aspfly1/XC406639.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/XC210237.ogg.npy (deflated 35%)\n  adding: specs/train/aspfly1/XC458411.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/XC760797.ogg.npy (deflated 23%)\n  adding: specs/train/aspfly1/XC444464.ogg.npy (deflated 14%)\n  adding: specs/train/aspfly1/XC633461.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/XC206805.ogg.npy (deflated 17%)\n  adding: specs/train/aspfly1/XC210848.ogg.npy (deflated 33%)\n  adding: specs/train/aspfly1/XC604446.ogg.npy (deflated 22%)\n  adding: specs/train/aspfly1/XC400498.ogg.npy (deflated 15%)\n  adding: specs/train/aspfly1/XC86931.ogg.npy (deflated 17%)\n  adding: specs/train/nilfly2/ (stored 0%)\n  adding: specs/train/nilfly2/XC239738.ogg.npy (deflated 17%)\n  adding: specs/train/nilfly2/XC788165.ogg.npy (deflated 24%)\n  adding: specs/train/nilfly2/XC548372.ogg.npy (deflated 18%)\n  adding: specs/train/nilfly2/XC856424.ogg.npy (deflated 20%)\n  adding: specs/train/nilfly2/XC856432.ogg.npy (deflated 17%)\n  adding: specs/train/nilfly2/XC400011.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/ (stored 0%)\n  adding: specs/train/brnhao1/XC19607.ogg.npy (deflated 26%)\n  adding: specs/train/brnhao1/XC630514.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC779882.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC155373.ogg.npy (deflated 24%)\n  adding: specs/train/brnhao1/XC624608.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC823509.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC371936.ogg.npy (deflated 30%)\n  adding: specs/train/brnhao1/XC643715.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC438467.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC125355.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC336095.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC382468.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC371369.ogg.npy (deflated 22%)\n  adding: specs/train/brnhao1/XC486586.ogg.npy (deflated 20%)\n  adding: specs/train/brnhao1/XC352338.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC124208.ogg.npy (deflated 22%)\n  adding: specs/train/brnhao1/XC744702.ogg.npy (deflated 22%)\n  adding: specs/train/brnhao1/XC372566.ogg.npy (deflated 47%)\n  adding: specs/train/brnhao1/XC327442.ogg.npy (deflated 30%)\n  adding: specs/train/brnhao1/XC210683.ogg.npy (deflated 29%)\n  adding: specs/train/brnhao1/XC503420.ogg.npy (deflated 22%)\n  adding: specs/train/brnhao1/XC766805.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC790590.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC647840.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC150289.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC668501.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC539805.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC341569.ogg.npy (deflated 12%)\n  adding: specs/train/brnhao1/XC566238.ogg.npy (deflated 24%)\n  adding: specs/train/brnhao1/XC422646.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC531877.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC124210.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC356429.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC756536.ogg.npy (deflated 20%)\n  adding: specs/train/brnhao1/XC496387.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC546664.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC466296.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC608651.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC295774.ogg.npy (deflated 71%)\n  adding: specs/train/brnhao1/XC730732.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC482486.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC158670.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC542268.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC566237.ogg.npy (deflated 24%)\n  adding: specs/train/brnhao1/XC610740.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC608657.ogg.npy (deflated 21%)\n  adding: specs/train/brnhao1/XC350927.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC171249.ogg.npy (deflated 24%)\n  adding: specs/train/brnhao1/XC301660.ogg.npy (deflated 13%)\n  adding: specs/train/brnhao1/XC404182.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC819730.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC730733.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC779881.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC660215.ogg.npy (deflated 13%)\n  adding: specs/train/brnhao1/XC285173.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC652568.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC684827.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC469354.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC400391.ogg.npy (deflated 34%)\n  adding: specs/train/brnhao1/XC858389.ogg.npy (deflated 29%)\n  adding: specs/train/brnhao1/XC747174.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC829152.ogg.npy (deflated 21%)\n  adding: specs/train/brnhao1/XC214645.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC608659.ogg.npy (deflated 19%)\n  adding: specs/train/brnhao1/XC386076.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC313094.ogg.npy (deflated 22%)\n  adding: specs/train/brnhao1/XC469355.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC550452.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC610758.ogg.npy (deflated 32%)\n  adding: specs/train/brnhao1/XC773334.ogg.npy (deflated 17%)\n  adding: specs/train/brnhao1/XC284847.ogg.npy (deflated 14%)\n  adding: specs/train/brnhao1/XC279203.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC284533.ogg.npy (deflated 20%)\n  adding: specs/train/brnhao1/XC237595.ogg.npy (deflated 27%)\n  adding: specs/train/brnhao1/XC651691.ogg.npy (deflated 10%)\n  adding: specs/train/brnhao1/XC507989.ogg.npy (deflated 33%)\n  adding: specs/train/brnhao1/XC778965.ogg.npy (deflated 41%)\n  adding: specs/train/brnhao1/XC696746.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC295772.ogg.npy (deflated 40%)\n  adding: specs/train/brnhao1/XC778559.ogg.npy (deflated 45%)\n  adding: specs/train/brnhao1/XC740229.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC346539.ogg.npy (deflated 18%)\n  adding: specs/train/brnhao1/XC778966.ogg.npy (deflated 36%)\n  adding: specs/train/brnhao1/XC404183.ogg.npy (deflated 21%)\n  adding: specs/train/brnhao1/XC173508.ogg.npy (deflated 21%)\n  adding: specs/train/brnhao1/XC775185.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC469353.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC782084.ogg.npy (deflated 21%)\n  adding: specs/train/brnhao1/XC608652.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC534356.ogg.npy (deflated 16%)\n  adding: specs/train/brnhao1/XC756988.ogg.npy (deflated 20%)\n  adding: specs/train/brnhao1/XC73064.ogg.npy (deflated 20%)\n  adding: specs/train/brnhao1/XC610759.ogg.npy (deflated 25%)\n  adding: specs/train/brnhao1/XC540144.ogg.npy (deflated 25%)\n  adding: specs/train/brnhao1/XC775183.ogg.npy (deflated 15%)\n  adding: specs/train/brnhao1/XC394036.ogg.npy (deflated 61%)\n  adding: specs/train/brnhao1/XC608654.ogg.npy (deflated 23%)\n  adding: specs/train/brnhao1/XC466297.ogg.npy (deflated 19%)\n  adding: specs/train/malpar1/ (stored 0%)\n  adding: specs/train/malpar1/XC414770.ogg.npy (deflated 15%)\n  adding: specs/train/malpar1/XC604530.ogg.npy (deflated 21%)\n  adding: specs/train/malpar1/XC197770.ogg.npy (deflated 12%)\n  adding: specs/train/malpar1/XC499664.ogg.npy (deflated 22%)\n  adding: specs/train/malpar1/XC178252.ogg.npy (deflated 21%)\n  adding: specs/train/malpar1/XC215862.ogg.npy (deflated 10%)\n  adding: specs/train/malpar1/XC404465.ogg.npy (deflated 12%)\n  adding: specs/train/malpar1/XC777671.ogg.npy (deflated 19%)\n  adding: specs/train/malpar1/XC217787.ogg.npy (deflated 25%)\n  adding: specs/train/malpar1/XC778609.ogg.npy (deflated 17%)\n  adding: specs/train/malpar1/XC190756.ogg.npy (deflated 26%)\n  adding: specs/train/malpar1/XC540670.ogg.npy (deflated 23%)\n  adding: specs/train/malpar1/XC158217.ogg.npy (deflated 18%)\n  adding: specs/train/malpar1/XC753447.ogg.npy (deflated 16%)\n  adding: specs/train/malpar1/XC568954.ogg.npy (deflated 17%)\n  adding: specs/train/malpar1/XC499663.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/ (stored 0%)\n  adding: specs/train/commyn/XC652901.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC444548.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC659211.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC110881.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC116527.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC110874.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC855625.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC680909.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC402381.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC505883.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC269131.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC281918.ogg.npy (deflated 28%)\n  adding: specs/train/commyn/XC402380.ogg.npy (deflated 73%)\n  adding: specs/train/commyn/XC362679.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC157876.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC528936.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC519640.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC358067.ogg.npy (deflated 28%)\n  adding: specs/train/commyn/XC544012.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC294325.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC659214.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC546566.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC110968.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC500615.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC812212.ogg.npy (deflated 24%)\n  adding: specs/train/commyn/XC528929.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC661253.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC518553.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC203356.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC203346.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC116708.ogg.npy (deflated 52%)\n  adding: specs/train/commyn/XC721477.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC503850.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC203359.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC679611.ogg.npy (deflated 29%)\n  adding: specs/train/commyn/XC184794.ogg.npy (deflated 33%)\n  adding: specs/train/commyn/XC489173.ogg.npy (deflated 57%)\n  adding: specs/train/commyn/XC185698.ogg.npy (deflated 38%)\n  adding: specs/train/commyn/XC73788.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC309110.ogg.npy (deflated 26%)\n  adding: specs/train/commyn/XC511898.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC187040.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC110880.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC400123.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC379536.ogg.npy (deflated 24%)\n  adding: specs/train/commyn/XC651854.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC506210.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC335602.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC444488.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC442856.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC183763.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC40087.ogg.npy (deflated 23%)\n  adding: specs/train/commyn/XC183879.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC183496.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC591907.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC823812.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC73133.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC208164.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC156759.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC336261.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC555308.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC469075.ogg.npy (deflated 30%)\n  adding: specs/train/commyn/XC639485.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC812211.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC704442.ogg.npy (deflated 11%)\n  adding: specs/train/commyn/XC400882.ogg.npy (deflated 12%)\n  adding: specs/train/commyn/XC203339.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC446211.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC623016.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC503281.ogg.npy (deflated 34%)\n  adding: specs/train/commyn/XC558752.ogg.npy (deflated 12%)\n  adding: specs/train/commyn/XC110876.ogg.npy (deflated 22%)\n  adding: specs/train/commyn/XC469357.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC652903.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC187036.ogg.npy (deflated 31%)\n  adding: specs/train/commyn/XC551659.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC318687.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC110969.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC114748.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC724550.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC599867.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC599364.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC187497.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC142706.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC183809.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC282869.ogg.npy (deflated 12%)\n  adding: specs/train/commyn/XC542272.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC607249.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC364334.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC195262.ogg.npy (deflated 30%)\n  adding: specs/train/commyn/XC713913.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC447268.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC528930.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC571185.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC203345.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC529139.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC284831.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC183811.ogg.npy (deflated 32%)\n  adding: specs/train/commyn/XC659209.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC146924.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC661228.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC281916.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC662734.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC445899.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC281920.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC203349.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC812209.ogg.npy (deflated 25%)\n  adding: specs/train/commyn/XC110873.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC643677.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC825746.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC203342.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC281919.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC508591.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC73132.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC518361.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC494124.ogg.npy (deflated 24%)\n  adding: specs/train/commyn/XC528935.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC198615.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC528933.ogg.npy (deflated 25%)\n  adding: specs/train/commyn/XC521180.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC596982.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC577887.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC110875.ogg.npy (deflated 23%)\n  adding: specs/train/commyn/XC577886.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC854837.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC533469.ogg.npy (deflated 22%)\n  adding: specs/train/commyn/XC521179.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC447270.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC379535.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC579177.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC546947.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC426169.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC736304.ogg.npy (deflated 12%)\n  adding: specs/train/commyn/XC571182.ogg.npy (deflated 12%)\n  adding: specs/train/commyn/XC507717.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC469381.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC812210.ogg.npy (deflated 22%)\n  adding: specs/train/commyn/XC110983.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC184793.ogg.npy (deflated 25%)\n  adding: specs/train/commyn/XC114909.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC509296.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC194939.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC684628.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC669699.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC410023.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC659210.ogg.npy (deflated 11%)\n  adding: specs/train/commyn/XC295122.ogg.npy (deflated 36%)\n  adding: specs/train/commyn/XC331396.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC379930.ogg.npy (deflated 51%)\n  adding: specs/train/commyn/XC612157.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC397490.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC332018.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC116526.ogg.npy (deflated 19%)\n  adding: specs/train/commyn/XC183880.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC609517.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC116524.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC73134.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC185711.ogg.npy (deflated 29%)\n  adding: specs/train/commyn/XC442857.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC323378.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC804370.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC546848.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC196959.ogg.npy (deflated 9%)\n  adding: specs/train/commyn/XC395089.ogg.npy (deflated 14%)\n  adding: specs/train/commyn/XC208162.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC464285.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC600430.ogg.npy (deflated 28%)\n  adding: specs/train/commyn/XC437110.ogg.npy (deflated 53%)\n  adding: specs/train/commyn/XC208163.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC463161.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC175518.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC40086.ogg.npy (deflated 21%)\n  adding: specs/train/commyn/XC180831.ogg.npy (deflated 51%)\n  adding: specs/train/commyn/XC548866.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC519458.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC607469.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC519762.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC756578.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC519659.ogg.npy (deflated 15%)\n  adding: specs/train/commyn/XC207633.ogg.npy (deflated 30%)\n  adding: specs/train/commyn/XC194940.ogg.npy (deflated 20%)\n  adding: specs/train/commyn/XC579693.ogg.npy (deflated 13%)\n  adding: specs/train/commyn/XC651026.ogg.npy (deflated 27%)\n  adding: specs/train/commyn/XC344437.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC110877.ogg.npy (deflated 22%)\n  adding: specs/train/commyn/XC596983.ogg.npy (deflated 17%)\n  adding: specs/train/commyn/XC521754.ogg.npy (deflated 18%)\n  adding: specs/train/commyn/XC520058.ogg.npy (deflated 16%)\n  adding: specs/train/commyn/XC363402.ogg.npy (deflated 12%)\n  adding: specs/train/whbbul2/ (stored 0%)\n  adding: specs/train/whbbul2/XC633433.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC197749.ogg.npy (deflated 17%)\n  adding: specs/train/whbbul2/XC163925.ogg.npy (deflated 17%)\n  adding: specs/train/whbbul2/XC320268.ogg.npy (deflated 22%)\n  adding: specs/train/whbbul2/XC163926.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC209559.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC19895.ogg.npy (deflated 19%)\n  adding: specs/train/whbbul2/XC209003.ogg.npy (deflated 14%)\n  adding: specs/train/whbbul2/XC778578.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC209566.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC481156.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC335671.ogg.npy (deflated 41%)\n  adding: specs/train/whbbul2/XC590324.ogg.npy (deflated 20%)\n  adding: specs/train/whbbul2/XC633434.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC209005.ogg.npy (deflated 14%)\n  adding: specs/train/whbbul2/XC276713.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC209565.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC207662.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC442347.ogg.npy (deflated 52%)\n  adding: specs/train/whbbul2/XC209001.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC514067.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC342684.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC575156.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC295481.ogg.npy (deflated 23%)\n  adding: specs/train/whbbul2/XC215849.ogg.npy (deflated 23%)\n  adding: specs/train/whbbul2/XC575157.ogg.npy (deflated 17%)\n  adding: specs/train/whbbul2/XC196950.ogg.npy (deflated 27%)\n  adding: specs/train/whbbul2/XC787331.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC663208.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC209004.ogg.npy (deflated 14%)\n  adding: specs/train/whbbul2/XC163931.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC366608.ogg.npy (deflated 11%)\n  adding: specs/train/whbbul2/XC214025.ogg.npy (deflated 18%)\n  adding: specs/train/whbbul2/XC163928.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC466299.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC335670.ogg.npy (deflated 41%)\n  adding: specs/train/whbbul2/XC741608.ogg.npy (deflated 23%)\n  adding: specs/train/whbbul2/XC652567.ogg.npy (deflated 13%)\n  adding: specs/train/whbbul2/XC514065.ogg.npy (deflated 15%)\n  adding: specs/train/whbbul2/XC459286.ogg.npy (deflated 12%)\n  adding: specs/train/whbbul2/XC285527.ogg.npy (deflated 12%)\n  adding: specs/train/whbbul2/XC288097.ogg.npy (deflated 14%)\n  adding: specs/train/smamin1/ (stored 0%)\n  adding: specs/train/smamin1/XC308252.ogg.npy (deflated 27%)\n  adding: specs/train/smamin1/XC531810.ogg.npy (deflated 22%)\n  adding: specs/train/smamin1/XC37783.ogg.npy (deflated 13%)\n  adding: specs/train/smamin1/XC295730.ogg.npy (deflated 50%)\n  adding: specs/train/smamin1/XC240366.ogg.npy (deflated 21%)\n  adding: specs/train/smamin1/XC121369.ogg.npy (deflated 31%)\n  adding: specs/train/smamin1/XC352053.ogg.npy (deflated 16%)\n  adding: specs/train/smamin1/XC435733.ogg.npy (deflated 50%)\n  adding: specs/train/smamin1/XC359469.ogg.npy (deflated 12%)\n  adding: specs/train/smamin1/XC207060.ogg.npy (deflated 18%)\n  adding: specs/train/smamin1/XC737847.ogg.npy (deflated 19%)\n  adding: specs/train/smamin1/XC842524.ogg.npy (deflated 29%)\n  adding: specs/train/smamin1/XC514098.ogg.npy (deflated 19%)\n  adding: specs/train/smamin1/XC212573.ogg.npy (deflated 21%)\n  adding: specs/train/smamin1/XC295729.ogg.npy (deflated 58%)\n  adding: specs/train/smamin1/XC633052.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/ (stored 0%)\n  adding: specs/train/zitcis1/XC791515.ogg.npy (deflated 48%)\n  adding: specs/train/zitcis1/XC565038.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC844802.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC656819.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC180971.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC634688.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC195732.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC583638.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC667711.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC787744.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC268232.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC789619.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC839548.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC795372.ogg.npy (deflated 34%)\n  adding: specs/train/zitcis1/XC557791.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC565064.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC784863.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC333706.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC727230.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC452278.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC307175.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC263699.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC268233.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC858550.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC301585.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC433373.ogg.npy (deflated 39%)\n  adding: specs/train/zitcis1/XC282659.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC337543.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC768441.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC435411.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC422791.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC169461.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC309646.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC303737.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC842049.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC756114.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC695164.ogg.npy (deflated 51%)\n  adding: specs/train/zitcis1/XC236928.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC720766.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC745086.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC125875.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC422082.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC401436.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC655341.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC773831.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC150462.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC799678.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC716987.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC643601.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC736832.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC310878.ogg.npy (deflated 30%)\n  adding: specs/train/zitcis1/XC546358.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC756608.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC178932.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC337544.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC738158.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC709755.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC545711.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC634088.ogg.npy (deflated 66%)\n  adding: specs/train/zitcis1/XC374758.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC558797.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC839550.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC699996.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC485272.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC722428.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC142652.ogg.npy (deflated 30%)\n  adding: specs/train/zitcis1/XC422725.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC749223.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC788852.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC208075.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC341144.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC710455.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC563715.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC336345.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC376645.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC773830.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC743720.ogg.npy (deflated 11%)\n  adding: specs/train/zitcis1/XC570082.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC745106.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC704616.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC302789.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC301724.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC568397.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC743891.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC468634.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC611409.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC337545.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC563799.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC124995.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC797511.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC511186.ogg.npy (deflated 32%)\n  adding: specs/train/zitcis1/XC791807.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC570083.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC633693.ogg.npy (deflated 55%)\n  adding: specs/train/zitcis1/XC138208.ogg.npy (deflated 56%)\n  adding: specs/train/zitcis1/XC356560.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC711692.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC338812.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC148898.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC289353.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC568231.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC482106.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC289351.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC526227.ogg.npy (deflated 35%)\n  adding: specs/train/zitcis1/XC633697.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC764144.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC287449.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC732693.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC463137.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC558490.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC175386.ogg.npy (deflated 32%)\n  adding: specs/train/zitcis1/XC797410.ogg.npy (deflated 66%)\n  adding: specs/train/zitcis1/XC465528.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC530406.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC611167.ogg.npy (deflated 48%)\n  adding: specs/train/zitcis1/XC610202.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC522179.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC500830.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC376754.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC287727.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC379642.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC341131.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC341141.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC767962.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC347209.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC128122.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC768492.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC634275.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC317381.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC468266.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC756607.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC378563.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC632795.ogg.npy (deflated 12%)\n  adding: specs/train/zitcis1/XC749452.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC777917.ogg.npy (deflated 36%)\n  adding: specs/train/zitcis1/XC398540.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC742836.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC646462.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC603522.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC307173.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC773615.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC845747.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC585417.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC179033.ogg.npy (deflated 36%)\n  adding: specs/train/zitcis1/XC477385.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC144536.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC632793.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC572913.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC302781.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC378572.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC175399.ogg.npy (deflated 28%)\n  adding: specs/train/zitcis1/XC745429.ogg.npy (deflated 27%)\n  adding: specs/train/zitcis1/XC362072.ogg.npy (deflated 31%)\n  adding: specs/train/zitcis1/XC763758.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC704584.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC634274.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC732361.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC572915.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC633794.ogg.npy (deflated 58%)\n  adding: specs/train/zitcis1/XC826917.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC572732.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC746992.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC583640.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC570145.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC768494.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC282656.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC179034.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC633801.ogg.npy (deflated 48%)\n  adding: specs/train/zitcis1/XC126367.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC687967.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC801493.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC432674.ogg.npy (deflated 12%)\n  adding: specs/train/zitcis1/XC781635.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC559943.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC768490.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC666249.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC443818.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC176037.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC845457.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC471757.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC190430.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC584040.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC711693.ogg.npy (deflated 27%)\n  adding: specs/train/zitcis1/XC559427.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC288599.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC776863.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC567945.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC383362.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC307022.ogg.npy (deflated 29%)\n  adding: specs/train/zitcis1/XC572643.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC372504.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC658039.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC794252.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC372254.ogg.npy (deflated 39%)\n  adding: specs/train/zitcis1/XC745671.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC176036.ogg.npy (deflated 42%)\n  adding: specs/train/zitcis1/XC596934.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC333704.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC607472.ogg.npy (deflated 34%)\n  adding: specs/train/zitcis1/XC413325.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC711288.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC600357.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC657381.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC362759.ogg.npy (deflated 11%)\n  adding: specs/train/zitcis1/XC824997.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC337538.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC467401.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC354451.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC572912.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC268234.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC474367.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC578320.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC800696.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC127472.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC142726.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC365728.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC724803.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC746456.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC768496.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC143572.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC499748.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC745112.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC829159.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC372250.ogg.npy (deflated 46%)\n  adding: specs/train/zitcis1/XC568233.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC572644.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC313576.ogg.npy (deflated 38%)\n  adding: specs/train/zitcis1/XC739162.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC573083.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC722325.ogg.npy (deflated 11%)\n  adding: specs/train/zitcis1/XC405616.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC801475.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC481357.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC563066.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC741292.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC840941.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC564094.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC596858.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC364765.ogg.npy (deflated 54%)\n  adding: specs/train/zitcis1/XC142651.ogg.npy (deflated 27%)\n  adding: specs/train/zitcis1/XC245643.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC451178.ogg.npy (deflated 53%)\n  adding: specs/train/zitcis1/XC337542.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC431788.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC341142.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC799742.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC768497.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC574113.ogg.npy (deflated 12%)\n  adding: specs/train/zitcis1/XC745087.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC377257.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC526448.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC480392.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC572914.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC801596.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC803673.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC745430.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC550601.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC494496.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC235417.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC568228.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC526449.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC564072.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC550607.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC659158.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC639392.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC663868.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC318307.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC713495.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC338234.ogg.npy (deflated 27%)\n  adding: specs/train/zitcis1/XC570141.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC723586.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC764143.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC179877.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC282894.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC714889.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC580255.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC768439.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC856723.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC756606.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC683289.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC323194.ogg.npy (deflated 33%)\n  adding: specs/train/zitcis1/XC633692.ogg.npy (deflated 61%)\n  adding: specs/train/zitcis1/XC289349.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC277479.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC534124.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC459013.ogg.npy (deflated 50%)\n  adding: specs/train/zitcis1/XC748245.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC337540.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC268230.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC828609.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC329640.ogg.npy (deflated 34%)\n  adding: specs/train/zitcis1/XC195733.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC845817.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC541917.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC378260.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC208072.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC724805.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC768498.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC580079.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC821307.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC204630.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC480393.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC474374.ogg.npy (deflated 25%)\n  adding: specs/train/zitcis1/XC208071.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC562228.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC768491.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC656624.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC383101.ogg.npy (deflated 43%)\n  adding: specs/train/zitcis1/XC615695.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC305008.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC542018.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC503149.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC434461.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC722493.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC567944.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC634028.ogg.npy (deflated 37%)\n  adding: specs/train/zitcis1/XC333707.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC495904.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC428267.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC598045.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC570134.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC710535.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC556969.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC689204.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC374757.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC378695.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC720569.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC476911.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC499803.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC341129.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC474357.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC263700.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC662202.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC359807.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC581217.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC683423.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC712557.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC667713.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC126356.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC301756.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC633689.ogg.npy (deflated 58%)\n  adding: specs/train/zitcis1/XC310413.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC596928.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC639178.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC758838.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC208074.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC633009.ogg.npy (deflated 24%)\n  adding: specs/train/zitcis1/XC282917.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC702287.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC763924.ogg.npy (deflated 50%)\n  adding: specs/train/zitcis1/XC148897.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC570139.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC570133.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC246998.ogg.npy (deflated 54%)\n  adding: specs/train/zitcis1/XC682432.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC621551.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC562093.ogg.npy (deflated 27%)\n  adding: specs/train/zitcis1/XC496917.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC251946.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC260288.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC789766.ogg.npy (deflated 19%)\n  adding: specs/train/zitcis1/XC793021.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC808223.ogg.npy (deflated 40%)\n  adding: specs/train/zitcis1/XC474779.ogg.npy (deflated 23%)\n  adding: specs/train/zitcis1/XC303866.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC536197.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC506279.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC298850.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC572648.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC471718.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC453767.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC403539.ogg.npy (deflated 37%)\n  adding: specs/train/zitcis1/XC386459.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC527576.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC499547.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC156869.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC809532.ogg.npy (deflated 17%)\n  adding: specs/train/zitcis1/XC338235.ogg.npy (deflated 26%)\n  adding: specs/train/zitcis1/XC789500.ogg.npy (deflated 57%)\n  adding: specs/train/zitcis1/XC410120.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC626814.ogg.npy (deflated 46%)\n  adding: specs/train/zitcis1/XC380678.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC125068.ogg.npy (deflated 15%)\n  adding: specs/train/zitcis1/XC856176.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC142111.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC385069.ogg.npy (deflated 20%)\n  adding: specs/train/zitcis1/XC431697.ogg.npy (deflated 14%)\n  adding: specs/train/zitcis1/XC711695.ogg.npy (deflated 29%)\n  adding: specs/train/zitcis1/XC746994.ogg.npy (deflated 21%)\n  adding: specs/train/zitcis1/XC378696.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC570143.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC724801.ogg.npy (deflated 18%)\n  adding: specs/train/zitcis1/XC625322.ogg.npy (deflated 45%)\n  adding: specs/train/zitcis1/XC523083.ogg.npy (deflated 13%)\n  adding: specs/train/zitcis1/XC460614.ogg.npy (deflated 41%)\n  adding: specs/train/zitcis1/XC633803.ogg.npy (deflated 43%)\n  adding: specs/train/zitcis1/XC500829.ogg.npy (deflated 22%)\n  adding: specs/train/zitcis1/XC266443.ogg.npy (deflated 16%)\n  adding: specs/train/zitcis1/XC625321.ogg.npy (deflated 35%)\n  adding: specs/train/zitcis1/XC544759.ogg.npy (deflated 21%)\n  adding: specs/train/brwjac1/ (stored 0%)\n  adding: specs/train/brwjac1/XC400761.ogg.npy (deflated 22%)\n  adding: specs/train/brwjac1/XC466295.ogg.npy (deflated 12%)\n  adding: specs/train/brwjac1/XC698144.ogg.npy (deflated 14%)\n  adding: specs/train/brwjac1/XC474621.ogg.npy (deflated 14%)\n  adding: specs/train/brwjac1/XC394870.ogg.npy (deflated 22%)\n  adding: specs/train/brwjac1/XC676587.ogg.npy (deflated 20%)\n  adding: specs/train/brwjac1/XC318463.ogg.npy (deflated 15%)\n  adding: specs/train/brwjac1/XC488675.ogg.npy (deflated 16%)\n  adding: specs/train/brwjac1/XC295484.ogg.npy (deflated 28%)\n  adding: specs/train/brwjac1/XC466294.ogg.npy (deflated 13%)\n  adding: specs/train/brwjac1/XC604402.ogg.npy (deflated 19%)\n  adding: specs/train/brwjac1/XC207099.ogg.npy (deflated 13%)\n  adding: specs/train/brwjac1/XC449769.ogg.npy (deflated 24%)\n  adding: specs/train/brwjac1/XC697575.ogg.npy (deflated 13%)\n  adding: specs/train/brwjac1/XC247318.ogg.npy (deflated 20%)\n  adding: specs/train/brwjac1/XC845759.ogg.npy (deflated 13%)\n  adding: specs/train/indrol2/ (stored 0%)\n  adding: specs/train/indrol2/XC37519.ogg.npy (deflated 14%)\n  adding: specs/train/indrol2/XC555541.ogg.npy (deflated 20%)\n  adding: specs/train/indrol2/XC410423.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC611617.ogg.npy (deflated 18%)\n  adding: specs/train/indrol2/XC508365.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC614431.ogg.npy (deflated 21%)\n  adding: specs/train/indrol2/XC487524.ogg.npy (deflated 14%)\n  adding: specs/train/indrol2/XC600798.ogg.npy (deflated 13%)\n  adding: specs/train/indrol2/XC116751.ogg.npy (deflated 23%)\n  adding: specs/train/indrol2/XC214459.ogg.npy (deflated 15%)\n  adding: specs/train/indrol2/XC362062.ogg.npy (deflated 12%)\n  adding: specs/train/indrol2/XC398456.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC575121.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC118197.ogg.npy (deflated 14%)\n  adding: specs/train/indrol2/XC116749.ogg.npy (deflated 22%)\n  adding: specs/train/indrol2/XC611151.ogg.npy (deflated 20%)\n  adding: specs/train/indrol2/XC345160.ogg.npy (deflated 16%)\n  adding: specs/train/indrol2/XC514856.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC252597.ogg.npy (deflated 20%)\n  adding: specs/train/indrol2/XC659806.ogg.npy (deflated 19%)\n  adding: specs/train/indrol2/XC432461.ogg.npy (deflated 15%)\n  adding: specs/train/indrol2/XC397283.ogg.npy (deflated 21%)\n  adding: specs/train/indrol2/XC479117.ogg.npy (deflated 17%)\n  adding: specs/train/indrol2/XC571487.ogg.npy (deflated 16%)\n  adding: specs/train/indrol2/XC565947.ogg.npy (deflated 14%)\n  adding: specs/train/indrol2/XC442343.ogg.npy (deflated 85%)\n  adding: specs/train/indrol2/XC604406.ogg.npy (deflated 13%)\n  adding: specs/train/indrol2/XC240337.ogg.npy (deflated 20%)\n  adding: specs/train/lewduc1/ (stored 0%)\n  adding: specs/train/lewduc1/XC40037.ogg.npy (deflated 20%)\n  adding: specs/train/lewduc1/XC667381.ogg.npy (deflated 57%)\n  adding: specs/train/lewduc1/XC254813.ogg.npy (deflated 20%)\n  adding: specs/train/lewduc1/XC169762.ogg.npy (deflated 17%)\n  adding: specs/train/lewduc1/XC328307.ogg.npy (deflated 10%)\n  adding: specs/train/lewduc1/XC786918.ogg.npy (deflated 19%)\n  adding: specs/train/lewduc1/XC754768.ogg.npy (deflated 35%)\n  adding: specs/train/lewduc1/XC124374.ogg.npy (deflated 12%)\n  adding: specs/train/lewduc1/XC190973.ogg.npy (deflated 10%)\n  adding: specs/train/lewduc1/XC295227.ogg.npy (deflated 12%)\n  adding: specs/train/lewduc1/XC190866.ogg.npy (deflated 10%)\n  adding: specs/train/lewduc1/XC578472.ogg.npy (deflated 19%)\n  adding: specs/train/lewduc1/XC733108.ogg.npy (deflated 81%)\n  adding: specs/train/lewduc1/XC612007.ogg.npy (deflated 16%)\n  adding: specs/train/lewduc1/XC446274.ogg.npy (deflated 16%)\n  adding: specs/train/lewduc1/XC777061.ogg.npy (deflated 19%)\n  adding: specs/train/lewduc1/XC276849.ogg.npy (deflated 18%)\n  adding: specs/train/lewduc1/XC767521.ogg.npy (deflated 15%)\n  adding: specs/train/lewduc1/XC207641.ogg.npy (deflated 17%)\n  adding: specs/train/lewduc1/XC453743.ogg.npy (deflated 13%)\n  adding: specs/train/lewduc1/XC733109.ogg.npy (deflated 16%)\n  adding: specs/train/lewduc1/XC377619.ogg.npy (deflated 20%)\n  adding: specs/train/lewduc1/XC845372.ogg.npy (deflated 19%)\n  adding: specs/train/lewduc1/XC295161.ogg.npy (deflated 13%)\n  adding: specs/train/lewduc1/XC693226.ogg.npy (deflated 18%)\n  adding: specs/train/lewduc1/XC261506.ogg.npy (deflated 20%)\n  adding: specs/train/bkcbul1/ (stored 0%)\n  adding: specs/train/bkcbul1/XC659323.ogg.npy (deflated 21%)\n  adding: specs/train/bkcbul1/XC619724.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC125501.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC216650.ogg.npy (deflated 17%)\n  adding: specs/train/bkcbul1/XC214031.ogg.npy (deflated 17%)\n  adding: specs/train/bkcbul1/XC741501.ogg.npy (deflated 18%)\n  adding: specs/train/bkcbul1/XC306398.ogg.npy (deflated 18%)\n  adding: specs/train/bkcbul1/XC196567.ogg.npy (deflated 25%)\n  adding: specs/train/bkcbul1/XC190871.ogg.npy (deflated 41%)\n  adding: specs/train/bkcbul1/XC178275.ogg.npy (deflated 24%)\n  adding: specs/train/bkcbul1/XC214647.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC783987.ogg.npy (deflated 24%)\n  adding: specs/train/bkcbul1/XC209941.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC783986.ogg.npy (deflated 22%)\n  adding: specs/train/bkcbul1/XC19671.ogg.npy (deflated 17%)\n  adding: specs/train/bkcbul1/XC498568.ogg.npy (deflated 21%)\n  adding: specs/train/bkcbul1/XC214026.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC302749.ogg.npy (deflated 19%)\n  adding: specs/train/bkcbul1/XC129030.ogg.npy (deflated 14%)\n  adding: .virtual_documents/ (stored 0%)\n","output_type":"stream"}]},{"cell_type":"code","source":"","metadata":{},"execution_count":null,"outputs":[]}]}
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "e424b8cf",
+   "metadata": {
+    "papermill": {
+     "duration": 0.00817,
+     "end_time": "2024-06-02T07:44:11.371675",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:11.363505",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# Let's Think of a Better Split Method"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "abd8c2fa",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:11.388147Z",
+     "iopub.status.busy": "2024-06-02T07:44:11.387370Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.397323Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.396149Z"
+    },
+    "id": "2dt7oG43VAqc",
+    "papermill": {
+     "duration": 1.021615,
+     "end_time": "2024-06-02T07:44:12.400394",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:11.378779",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import librosa as lb\n",
+    "import librosa.display as lbd\n",
+    "import soundfile as sf\n",
+    "from  soundfile import SoundFile\n",
+    "import pandas as pd\n",
+    "from  IPython.display import Audio\n",
+    "from pathlib import Path\n",
+    "\n",
+    "from matplotlib import pyplot as plt\n",
+    "\n",
+    "from tqdm.notebook import tqdm\n",
+    "import joblib, json, re\n",
+    "\n",
+    "from  sklearn.model_selection  import StratifiedKFold\n",
+    "tqdm.pandas()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "e088ad91",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.418725Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.418096Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.621498Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.620404Z"
+    },
+    "papermill": {
+     "duration": 0.21445,
+     "end_time": "2024-06-02T07:44:12.624316",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.409866",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "df = pd.read_csv('/kaggle/input/birdclef-2024/train_metadata.csv')\n",
+    "df['secondary_labels'] = df['secondary_labels'].apply(lambda x: re.findall(r\"'(\\w+)'\", x))\n",
+    "df['len_sec_labels'] = df['secondary_labels'].map(len)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "a7b774b0",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.640677Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.639880Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.667839Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.666801Z"
+    },
+    "papermill": {
+     "duration": 0.039501,
+     "end_time": "2024-06-02T07:44:12.671003",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.631502",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>primary_label</th>\n",
+       "      <th>secondary_labels</th>\n",
+       "      <th>type</th>\n",
+       "      <th>latitude</th>\n",
+       "      <th>longitude</th>\n",
+       "      <th>scientific_name</th>\n",
+       "      <th>common_name</th>\n",
+       "      <th>author</th>\n",
+       "      <th>license</th>\n",
+       "      <th>rating</th>\n",
+       "      <th>url</th>\n",
+       "      <th>filename</th>\n",
+       "      <th>len_sec_labels</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>3154</th>\n",
+       "      <td>blnmon1</td>\n",
+       "      <td>[copbar1, pursun4, pursun4]</td>\n",
+       "      <td>['adult', 'sex uncertain', 'song']</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>NaN</td>\n",
+       "      <td>Hypothymis azurea</td>\n",
+       "      <td>Black-naped Monarch</td>\n",
+       "      <td>Aditya Soman</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>2.5</td>\n",
+       "      <td>https://www.xeno-canto.org/659841</td>\n",
+       "      <td>blnmon1/XC659841.ogg</td>\n",
+       "      <td>3</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>13172</th>\n",
+       "      <td>grywag</td>\n",
+       "      <td>[grywag, houspa]</td>\n",
+       "      <td>['male', 'song']</td>\n",
+       "      <td>37.8392</td>\n",
+       "      <td>-25.7944</td>\n",
+       "      <td>Motacilla cinerea</td>\n",
+       "      <td>Gray Wagtail</td>\n",
+       "      <td>Cedric Mroczko</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>3.5</td>\n",
+       "      <td>https://www.xeno-canto.org/263232</td>\n",
+       "      <td>grywag/XC263232.ogg</td>\n",
+       "      <td>2</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>20208</th>\n",
+       "      <td>rewbul</td>\n",
+       "      <td>[rewbul]</td>\n",
+       "      <td>['call']</td>\n",
+       "      <td>-20.4243</td>\n",
+       "      <td>57.4296</td>\n",
+       "      <td>Pycnonotus jocosus</td>\n",
+       "      <td>Red-whiskered Bulbul</td>\n",
+       "      <td>Cedric Mroczko</td>\n",
+       "      <td>Creative Commons Attribution-NonCommercial-Sha...</td>\n",
+       "      <td>3.5</td>\n",
+       "      <td>https://www.xeno-canto.org/469086</td>\n",
+       "      <td>rewbul/XC469086.ogg</td>\n",
+       "      <td>1</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "      primary_label             secondary_labels  \\\n",
+       "3154        blnmon1  [copbar1, pursun4, pursun4]   \n",
+       "13172        grywag             [grywag, houspa]   \n",
+       "20208        rewbul                     [rewbul]   \n",
+       "\n",
+       "                                     type  latitude  longitude  \\\n",
+       "3154   ['adult', 'sex uncertain', 'song']       NaN        NaN   \n",
+       "13172                    ['male', 'song']   37.8392   -25.7944   \n",
+       "20208                            ['call']  -20.4243    57.4296   \n",
+       "\n",
+       "          scientific_name           common_name          author  \\\n",
+       "3154    Hypothymis azurea   Black-naped Monarch   Aditya Soman    \n",
+       "13172   Motacilla cinerea          Gray Wagtail  Cedric Mroczko   \n",
+       "20208  Pycnonotus jocosus  Red-whiskered Bulbul  Cedric Mroczko   \n",
+       "\n",
+       "                                                 license  rating  \\\n",
+       "3154   Creative Commons Attribution-NonCommercial-Sha...     2.5   \n",
+       "13172  Creative Commons Attribution-NonCommercial-Sha...     3.5   \n",
+       "20208  Creative Commons Attribution-NonCommercial-Sha...     3.5   \n",
+       "\n",
+       "                                     url              filename  len_sec_labels  \n",
+       "3154   https://www.xeno-canto.org/659841  blnmon1/XC659841.ogg               3  \n",
+       "13172  https://www.xeno-canto.org/263232   grywag/XC263232.ogg               2  \n",
+       "20208  https://www.xeno-canto.org/469086   rewbul/XC469086.ogg               1  "
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df[df.len_sec_labels>0].sample(3)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "c1496e06",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.688752Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.688005Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.700900Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.699979Z"
+    },
+    "papermill": {
+     "duration": 0.023859,
+     "end_time": "2024-06-02T07:44:12.703165",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.679306",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "zitcis1    500\n",
+       "lirplo     500\n",
+       "litgre1    500\n",
+       "comgre     500\n",
+       "comkin1    500\n",
+       "          ... \n",
+       "blaeag1      6\n",
+       "wynlau1      6\n",
+       "niwpig1      5\n",
+       "asiope1      5\n",
+       "integr       5\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 4,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b2cb5adb",
+   "metadata": {
+    "papermill": {
+     "duration": 0.007802,
+     "end_time": "2024-06-02T07:44:12.719130",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.711328",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# Something has to be done for Birds with <= 1 samples."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "3e54f493",
+   "metadata": {
+    "papermill": {
+     "duration": 0.007767,
+     "end_time": "2024-06-02T07:44:12.734781",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.727014",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "## Also the fact that we have to perform inference in 2 hours w/ CPU, I think best solution is just to have single split rather than using multiple folds."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "a0eef124",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.751997Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.751660Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.760564Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.759709Z"
+    },
+    "papermill": {
+     "duration": 0.020142,
+     "end_time": "2024-06-02T07:44:12.762821",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.742679",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "from sklearn.model_selection import train_test_split\n",
+    "import pandas as pd\n",
+    "\n",
+    "def birds_stratified_split(df, target_col, test_size=0.2):\n",
+    "    class_counts = df[target_col].value_counts()\n",
+    "    low_count_classes = class_counts[class_counts < 2].index.tolist() ### Birds with single counts\n",
+    "\n",
+    "    df['train'] = df[target_col].isin(low_count_classes)\n",
+    "\n",
+    "    train_df, val_df = train_test_split(df[~df['train']], test_size=test_size, stratify=df[~df['train']][target_col], random_state=42)\n",
+    "\n",
+    "    train_df = pd.concat([train_df, df[df['train']]], axis=0).reset_index(drop=True)\n",
+    "\n",
+    "    # Remove the 'valid' column\n",
+    "    train_df.drop('train', axis=1, inplace=True)\n",
+    "    val_df.drop('train', axis=1, inplace=True)\n",
+    "\n",
+    "    return train_df, val_df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "1f8fae80",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.779958Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.779661Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.859365Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.858488Z"
+    },
+    "papermill": {
+     "duration": 0.091496,
+     "end_time": "2024-06-02T07:44:12.862119",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.770623",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "train_df, valid_df = birds_stratified_split(df, 'primary_label', 0.2)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "55ad576c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.880579Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.880266Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.891691Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.890797Z"
+    },
+    "papermill": {
+     "duration": 0.023096,
+     "end_time": "2024-06-02T07:44:12.893990",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.870894",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "zitcis1    500\n",
+       "lirplo     500\n",
+       "litgre1    500\n",
+       "comgre     500\n",
+       "comkin1    500\n",
+       "          ... \n",
+       "blaeag1      6\n",
+       "wynlau1      6\n",
+       "niwpig1      5\n",
+       "asiope1      5\n",
+       "integr       5\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 7,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "1fd9896d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.911410Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.911122Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.921511Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.920610Z"
+    },
+    "papermill": {
+     "duration": 0.021575,
+     "end_time": "2024-06-02T07:44:12.923709",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.902134",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "graher1    400\n",
+       "litgre1    400\n",
+       "woosan     400\n",
+       "eurcoo     400\n",
+       "grnsan     400\n",
+       "          ... \n",
+       "wynlau1      5\n",
+       "blaeag1      5\n",
+       "asiope1      4\n",
+       "niwpig1      4\n",
+       "integr       4\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 8,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "train_df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "50639ace",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.941382Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.941087Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.949578Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.948799Z"
+    },
+    "papermill": {
+     "duration": 0.019685,
+     "end_time": "2024-06-02T07:44:12.951762",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.932077",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "houspa     100\n",
+       "barswa     100\n",
+       "blrwar1    100\n",
+       "comros     100\n",
+       "graher1    100\n",
+       "          ... \n",
+       "darter2      1\n",
+       "niwpig1      1\n",
+       "bncwoo3      1\n",
+       "blaeag1      1\n",
+       "paisto1      1\n",
+       "Name: primary_label, Length: 182, dtype: int64"
+      ]
+     },
+     "execution_count": 9,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "valid_df.primary_label.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "b0755a42",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.970175Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.969469Z",
+     "iopub.status.idle": "2024-06-02T07:44:12.974945Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.974021Z"
+    },
+    "papermill": {
+     "duration": 0.016875,
+     "end_time": "2024-06-02T07:44:12.977062",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.960187",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class Config:\n",
+    "    sampling_rate = 32000\n",
+    "    duration = 5 \n",
+    "    fmin = 0\n",
+    "    fmax = None\n",
+    "    audios_path = Path(\"/kaggle/input/birdclef-2024/train_audio\")\n",
+    "    out_dir_train = Path(\"specs/train\") \n",
+    "    \n",
+    "    out_dir_valid = Path(\"specs/valid\") \n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "2990fbfb",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:12.995322Z",
+     "iopub.status.busy": "2024-06-02T07:44:12.995034Z",
+     "iopub.status.idle": "2024-06-02T07:44:13.000098Z",
+     "shell.execute_reply": "2024-06-02T07:44:12.999284Z"
+    },
+    "papermill": {
+     "duration": 0.016617,
+     "end_time": "2024-06-02T07:44:13.002349",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:12.985732",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "Config.out_dir_train.mkdir(exist_ok=True, parents=True)\n",
+    "Config.out_dir_valid.mkdir(exist_ok=True, parents=True)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "7421dc46",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:13.021612Z",
+     "iopub.status.busy": "2024-06-02T07:44:13.021047Z",
+     "iopub.status.idle": "2024-06-02T07:44:13.026671Z",
+     "shell.execute_reply": "2024-06-02T07:44:13.025785Z"
+    },
+    "papermill": {
+     "duration": 0.017158,
+     "end_time": "2024-06-02T07:44:13.028856",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:13.011698",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def get_audio_info(filepath):\n",
+    "    \"\"\"Get some properties from  an audio file\"\"\"\n",
+    "    with SoundFile(filepath) as f:\n",
+    "        sr = f.samplerate\n",
+    "        frames = f.frames\n",
+    "        duration = float(frames)/sr\n",
+    "    return {\"frames\": frames, \"sr\": sr, \"duration\": duration}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "adc22af7",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:13.047221Z",
+     "iopub.status.busy": "2024-06-02T07:44:13.046658Z",
+     "iopub.status.idle": "2024-06-02T07:44:13.053627Z",
+     "shell.execute_reply": "2024-06-02T07:44:13.052631Z"
+    },
+    "id": "Kmh6xx5_NCjJ",
+    "outputId": "ad61f09f-6f0e-4204-c658-21112e051785",
+    "papermill": {
+     "duration": 0.018503,
+     "end_time": "2024-06-02T07:44:13.055807",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:13.037304",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def add_path_df(df):\n",
+    "    \n",
+    "    df[\"path\"] = [str(Config.audios_path/filename) for filename in df.filename]\n",
+    "    df = df.reset_index(drop=True)\n",
+    "    pool = joblib.Parallel(2)\n",
+    "    mapper = joblib.delayed(get_audio_info)\n",
+    "    tasks = [mapper(filepath) for filepath in df.path]\n",
+    "    df2 =  pd.DataFrame(pool(tqdm(tasks))).reset_index(drop=True)\n",
+    "    df = pd.concat([df,df2], axis=1).reset_index(drop=True)\n",
+    "\n",
+    "    return df"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "9affb5f8",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:13.074488Z",
+     "iopub.status.busy": "2024-06-02T07:44:13.073789Z",
+     "iopub.status.idle": "2024-06-02T07:44:13.078361Z",
+     "shell.execute_reply": "2024-06-02T07:44:13.077442Z"
+    },
+    "papermill": {
+     "duration": 0.015988,
+     "end_time": "2024-06-02T07:44:13.080401",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:13.064413",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "tqdm.pandas()\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "id": "2987f8d8",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:44:13.098966Z",
+     "iopub.status.busy": "2024-06-02T07:44:13.098408Z",
+     "iopub.status.idle": "2024-06-02T07:46:05.428331Z",
+     "shell.execute_reply": "2024-06-02T07:46:05.426986Z"
+    },
+    "papermill": {
+     "duration": 112.342045,
+     "end_time": "2024-06-02T07:46:05.431094",
+     "exception": false,
+     "start_time": "2024-06-02T07:44:13.089049",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "699eadca259a4230be6d730cc826cbdc",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/19567 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "train_df = add_path_df(train_df)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "id": "5d6f5d4a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:05.451548Z",
+     "iopub.status.busy": "2024-06-02T07:46:05.450654Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.139528Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.138484Z"
+    },
+    "papermill": {
+     "duration": 27.702433,
+     "end_time": "2024-06-02T07:46:33.142721",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:05.440288",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "5f8a5a85278c4af69c404b105339ac61",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/4892 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "valid_df = add_path_df(valid_df)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "6fd059ef",
+   "metadata": {
+    "papermill": {
+     "duration": 0.009733,
+     "end_time": "2024-06-02T07:46:33.163856",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.154123",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "id": "fe241c95",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.185118Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.184249Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.196789Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.195815Z"
+    },
+    "papermill": {
+     "duration": 0.025544,
+     "end_time": "2024-06-02T07:46:33.199117",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.173573",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "count    19567.000000\n",
+       "mean        41.858233\n",
+       "std         98.451733\n",
+       "min          0.470000\n",
+       "25%         11.180406\n",
+       "50%         22.230219\n",
+       "75%         44.564906\n",
+       "max       4670.641625\n",
+       "Name: duration, dtype: float64"
+      ]
+     },
+     "execution_count": 17,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "train_df[\"duration\"].describe()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "id": "0ff807e7",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.219370Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.219064Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.225036Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.224207Z"
+    },
+    "papermill": {
+     "duration": 0.018337,
+     "end_time": "2024-06-02T07:46:33.227025",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.208688",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def compute_melspec(y, sr, n_mels, fmin, fmax):\n",
+    "    \"\"\"\n",
+    "    Computes a mel-spectrogram and puts it at decibel scale\n",
+    "    Arguments:\n",
+    "        y {np array} -- signal\n",
+    "        params {AudioParams} -- Parameters to use for the spectrogram. Expected to have the attributes sr, n_mels, f_min, f_max\n",
+    "    Returns:\n",
+    "        np array -- Mel-spectrogram\n",
+    "    \"\"\"\n",
+    "    melspec = lb.feature.melspectrogram(\n",
+    "        y=y, sr=sr, n_mels=n_mels, fmin=fmin, fmax=fmax,\n",
+    "    )\n",
+    "\n",
+    "    melspec = lb.power_to_db(melspec).astype(np.float32)\n",
+    "    return melspec"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 19,
+   "id": "e46b962e",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.246766Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.246488Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.257732Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.256979Z"
+    },
+    "id": "-Nlw4E5UVAqi",
+    "papermill": {
+     "duration": 0.023434,
+     "end_time": "2024-06-02T07:46:33.259787",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.236353",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def mono_to_color(X, eps=1e-6, mean=None, std=None):\n",
+    "    mean = mean or X.mean()\n",
+    "    std = std or X.std()\n",
+    "    X = (X - mean) / (std + eps)\n",
+    "    \n",
+    "    _min, _max = X.min(), X.max()\n",
+    "\n",
+    "    if (_max - _min) > eps:\n",
+    "        V = np.clip(X, _min, _max)\n",
+    "        V = 255 * (V - _min) / (_max - _min)\n",
+    "        V = V.astype(np.uint8)\n",
+    "    else:\n",
+    "        V = np.zeros_like(X, dtype=np.uint8)\n",
+    "\n",
+    "    return V\n",
+    "\n",
+    "def crop_or_pad(y, length, is_train=True, start=None):\n",
+    "    if len(y) < length:\n",
+    "        y = np.concatenate([y, np.zeros(length - len(y))])\n",
+    "        \n",
+    "        n_repeats = length // len(y)\n",
+    "        epsilon = length % len(y)\n",
+    "        \n",
+    "        y = np.concatenate([y]*n_repeats + [y[:epsilon]])\n",
+    "        \n",
+    "    elif len(y) > length:\n",
+    "        if not is_train:\n",
+    "            start = start or 0\n",
+    "        else:\n",
+    "            start = start or np.random.randint(len(y) - length)\n",
+    "\n",
+    "        y = y[start:start + length]\n",
+    "\n",
+    "    return y"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "5beeade8",
+   "metadata": {
+    "papermill": {
+     "duration": 0.009488,
+     "end_time": "2024-06-02T07:46:33.278699",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.269211",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 20,
+   "id": "90a40075",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.300350Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.300040Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.314546Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.313713Z"
+    },
+    "papermill": {
+     "duration": 0.027927,
+     "end_time": "2024-06-02T07:46:33.316788",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.288861",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class AudioToImage:\n",
+    "    def __init__(self, sr=Config.sampling_rate, n_mels=128, fmin=Config.fmin, fmax=Config.fmax, duration=Config.duration, step=None, res_type=\"kaiser_fast\", resample=True, train = True):\n",
+    "\n",
+    "        self.sr = sr\n",
+    "        self.n_mels = n_mels\n",
+    "        self.fmin = fmin\n",
+    "        self.fmax = fmax or self.sr//2\n",
+    "\n",
+    "        self.duration = duration\n",
+    "        self.audio_length = self.duration*self.sr\n",
+    "        self.step = step or self.audio_length\n",
+    "        \n",
+    "        self.res_type = res_type\n",
+    "        self.resample = resample\n",
+    "\n",
+    "        self.train = train\n",
+    "    def audio_to_image(self, audio):\n",
+    "        melspec = compute_melspec(audio, self.sr, self.n_mels, self.fmin, self.fmax ) \n",
+    "        image = mono_to_color(melspec)\n",
+    "#         compute_melspec(y, sr, n_mels, fmin, fmax)\n",
+    "        return image\n",
+    "\n",
+    "    def __call__(self, row, save=True):\n",
+    "\n",
+    "      audio, orig_sr = sf.read(row.path, dtype=\"float32\")\n",
+    "\n",
+    "      if self.resample and orig_sr != self.sr:\n",
+    "        audio = lb.resample(audio, orig_sr, self.sr, res_type=self.res_type)\n",
+    "        \n",
+    "      audios = [audio[i:i+self.audio_length] for i in range(0, max(1, len(audio) - self.audio_length + 1), self.step)]\n",
+    "      audios[-1] = crop_or_pad(audios[-1] , length=self.audio_length)\n",
+    "      images = [self.audio_to_image(audio) for audio in audios]\n",
+    "      images = np.stack(images)\n",
+    "        \n",
+    "      if save:\n",
+    "        if self.train:\n",
+    "            path = Config.out_dir_train/f\"{row.filename}.npy\"\n",
+    "        else:\n",
+    "            path = Config.out_dir_valid/f\"{row.filename}.npy\"\n",
+    "            \n",
+    "        path.parent.mkdir(exist_ok=True, parents=True)\n",
+    "        np.save(str(path), images)\n",
+    "      else:\n",
+    "        return  row.filename, images"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 21,
+   "id": "326bc4d1",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.337490Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.337201Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.341950Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.340993Z"
+    },
+    "papermill": {
+     "duration": 0.017482,
+     "end_time": "2024-06-02T07:46:33.344287",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.326805",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "tqdm.pandas()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 22,
+   "id": "77c74e43",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.365221Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.364514Z",
+     "iopub.status.idle": "2024-06-02T07:46:33.370551Z",
+     "shell.execute_reply": "2024-06-02T07:46:33.369635Z"
+    },
+    "papermill": {
+     "duration": 0.0187,
+     "end_time": "2024-06-02T07:46:33.372589",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.353889",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def get_audios_as_images(df, train = True):\n",
+    "    pool = joblib.Parallel(2)\n",
+    "    \n",
+    "    converter = AudioToImage(step=int(Config.duration*0.666*Config.sampling_rate),train=train)\n",
+    "    mapper = joblib.delayed(converter)\n",
+    "    tasks = [mapper(row) for row in df.itertuples(False)]\n",
+    "    pool(tqdm(tasks))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 23,
+   "id": "3fb74f27",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T07:46:33.393312Z",
+     "iopub.status.busy": "2024-06-02T07:46:33.392998Z",
+     "iopub.status.idle": "2024-06-02T08:43:59.222415Z",
+     "shell.execute_reply": "2024-06-02T08:43:59.221180Z"
+    },
+    "papermill": {
+     "duration": 3445.844759,
+     "end_time": "2024-06-02T08:43:59.226814",
+     "exception": false,
+     "start_time": "2024-06-02T07:46:33.382055",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "29b9e46c3b104ef3b4edb2fa08ec72f0",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/19567 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "get_audios_as_images(train_df, train = True)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "id": "9d23f790",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-06-02T08:43:59.258200Z",
+     "iopub.status.busy": "2024-06-02T08:43:59.257184Z",
+     "iopub.status.idle": "2024-06-02T08:58:33.061260Z",
+     "shell.execute_reply": "2024-06-02T08:58:33.060084Z"
+    },
+    "papermill": {
+     "duration": 873.819447,
+     "end_time": "2024-06-02T08:58:33.064225",
+     "exception": false,
+     "start_time": "2024-06-02T08:43:59.244778",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "b55fbbda2f12462fb4aa7ec292e60a14",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "  0%|          | 0/4892 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "get_audios_as_images(valid_df, train = False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "37cc2894",
+   "metadata": {
+    "execution": {
+     "iopub.status.idle": "2024-06-02T07:32:01.969650Z",
+     "shell.execute_reply": "2024-06-02T07:32:01.968474Z",
+     "shell.execute_reply.started": "2024-06-02T07:23:32.558295Z"
+    },
+    "papermill": {
+     "duration": 0.010071,
+     "end_time": "2024-06-02T08:58:33.084927",
+     "exception": false,
+     "start_time": "2024-06-02T08:58:33.074856",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f1d16b19",
+   "metadata": {
+    "papermill": {
+     "duration": 0.010198,
+     "end_time": "2024-06-02T08:58:33.105133",
+     "exception": false,
+     "start_time": "2024-06-02T08:58:33.094935",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "nvidiaTeslaT4",
+   "dataSources": [
+    {
+     "databundleVersionId": 8068726,
+     "sourceId": 70203,
+     "sourceType": "competition"
+    }
+   ],
+   "dockerImageVersionId": 30407,
+   "isGpuEnabled": true,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.12"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 4474.811003,
+   "end_time": "2024-06-02T08:58:35.752042",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2024-06-02T07:44:00.941039",
+   "version": "2.4.0"
+  },
+  "widgets": {
+   "application/vnd.jupyter.widget-state+json": {
+    "state": {
+     "02c8fb9b54384d7e8aa89db0b655c45f": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_723bf539d1d24e10b37d7d0e411ea4a4",
+       "max": 19567.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_73f56cb9e8d14b5aa46deddaf0f276d9",
+       "value": 19567.0
+      }
+     },
+     "0a6013618a744eb2b3ef021b0da85131": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "18fbf56861454320ad24aedc74ff5287": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_f0c5f2960b03446687270155c89937ef",
+       "placeholder": "​",
+       "style": "IPY_MODEL_53ceacafceef448a9f96b14d622e568c",
+       "value": " 4892/4892 [00:27&lt;00:00, 147.20it/s]"
+      }
+     },
+     "21b8c8447bad48cbbfd3c3aab25a4b7e": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_beb54a905386406eadb57c0dfd007e25",
+       "max": 4892.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_0a6013618a744eb2b3ef021b0da85131",
+       "value": 4892.0
+      }
+     },
+     "22197d153ae54e759f72fdb34d9b6689": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_6247ef07917d453f8712127969ec1e73",
+       "placeholder": "​",
+       "style": "IPY_MODEL_2df7d6a01a17414c9931d3fba5d4f3f3",
+       "value": "100%"
+      }
+     },
+     "293736ca409840c1a449e7250f13d283": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_69aec123dab146e9a9dfa0a17eccce34",
+       "placeholder": "​",
+       "style": "IPY_MODEL_a328176e32754fd488b774984c5e0ae6",
+       "value": " 19567/19567 [57:25&lt;00:00,  6.89it/s]"
+      }
+     },
+     "29b9e46c3b104ef3b4edb2fa08ec72f0": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_ab22f89b9262418eaf8e3fc191c09a96",
+        "IPY_MODEL_9bbcfb16960d44f68666e78ce56583de",
+        "IPY_MODEL_293736ca409840c1a449e7250f13d283"
+       ],
+       "layout": "IPY_MODEL_f10eb88ab0e142bda4123ec8624d9103"
+      }
+     },
+     "2df7d6a01a17414c9931d3fba5d4f3f3": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "34407faed8e7462dae60efdeb88395b6": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "438ece95de70458ca0da43ab41dbca44": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "473fcf181c6d4285af60c2699934f12c": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "48cced1d202f4b068be928780fb04cf5": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "4bc96023e0614718b5ddf5bff00f6c26": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "5256896c377249729aa601505ab435f7": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "53ceacafceef448a9f96b14d622e568c": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "57b5523c7d0a4072a98f7d351a289aca": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "5f8a5a85278c4af69c404b105339ac61": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_22197d153ae54e759f72fdb34d9b6689",
+        "IPY_MODEL_21b8c8447bad48cbbfd3c3aab25a4b7e",
+        "IPY_MODEL_18fbf56861454320ad24aedc74ff5287"
+       ],
+       "layout": "IPY_MODEL_48cced1d202f4b068be928780fb04cf5"
+      }
+     },
+     "618b1007751043608d3a46b6489d33e0": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "6247ef07917d453f8712127969ec1e73": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "62b890a35e7a42d3a5d988d89067fa76": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_73e939cefde74cd0b2e245ddcba2269f",
+       "placeholder": "​",
+       "style": "IPY_MODEL_4bc96023e0614718b5ddf5bff00f6c26",
+       "value": "100%"
+      }
+     },
+     "642d1f5a17fc464e81bbe7148857544b": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "699eadca259a4230be6d730cc826cbdc": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_e4800108677b4b75ad247e9e8993c914",
+        "IPY_MODEL_02c8fb9b54384d7e8aa89db0b655c45f",
+        "IPY_MODEL_9d32d04e6d1f4d9d9a30128ee5d75d01"
+       ],
+       "layout": "IPY_MODEL_642d1f5a17fc464e81bbe7148857544b"
+      }
+     },
+     "69aec123dab146e9a9dfa0a17eccce34": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "723bf539d1d24e10b37d7d0e411ea4a4": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "73e939cefde74cd0b2e245ddcba2269f": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "73f56cb9e8d14b5aa46deddaf0f276d9": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "791cc07d994d42888f7df0eec82c56c5": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_438ece95de70458ca0da43ab41dbca44",
+       "placeholder": "​",
+       "style": "IPY_MODEL_8f354f0128274f6aa40d00da7f059d9b",
+       "value": " 4892/4892 [14:32&lt;00:00,  3.31it/s]"
+      }
+     },
+     "8c69a96b142a41b8b3be5dbf4ad41c55": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "8f354f0128274f6aa40d00da7f059d9b": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "99528ae65f8943e8b4c4e486df2b4a5f": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "9bbcfb16960d44f68666e78ce56583de": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_e5b4cebb39a940c1a0bac295177bb09e",
+       "max": 19567.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_618b1007751043608d3a46b6489d33e0",
+       "value": 19567.0
+      }
+     },
+     "9c4ba0b117c946f18a38c543ace7478a": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "9d32d04e6d1f4d9d9a30128ee5d75d01": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_8c69a96b142a41b8b3be5dbf4ad41c55",
+       "placeholder": "​",
+       "style": "IPY_MODEL_34407faed8e7462dae60efdeb88395b6",
+       "value": " 19567/19567 [01:51&lt;00:00, 186.80it/s]"
+      }
+     },
+     "a328176e32754fd488b774984c5e0ae6": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "a661bbbe22ea4a5da6f3396cb6845645": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "ProgressStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "ProgressStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "bar_color": null,
+       "description_width": ""
+      }
+     },
+     "ab22f89b9262418eaf8e3fc191c09a96": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_9c4ba0b117c946f18a38c543ace7478a",
+       "placeholder": "​",
+       "style": "IPY_MODEL_da2de6662caa4ed394194e2e5a5e6811",
+       "value": "100%"
+      }
+     },
+     "b55fbbda2f12462fb4aa7ec292e60a14": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HBoxModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HBoxModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HBoxView",
+       "box_style": "",
+       "children": [
+        "IPY_MODEL_62b890a35e7a42d3a5d988d89067fa76",
+        "IPY_MODEL_c3bd8b58204a4f3585eb2ca1d91a0288",
+        "IPY_MODEL_791cc07d994d42888f7df0eec82c56c5"
+       ],
+       "layout": "IPY_MODEL_57b5523c7d0a4072a98f7d351a289aca"
+      }
+     },
+     "beb54a905386406eadb57c0dfd007e25": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "c3bd8b58204a4f3585eb2ca1d91a0288": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "FloatProgressModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "FloatProgressModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "ProgressView",
+       "bar_style": "success",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_99528ae65f8943e8b4c4e486df2b4a5f",
+       "max": 4892.0,
+       "min": 0.0,
+       "orientation": "horizontal",
+       "style": "IPY_MODEL_a661bbbe22ea4a5da6f3396cb6845645",
+       "value": 4892.0
+      }
+     },
+     "da2de6662caa4ed394194e2e5a5e6811": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "DescriptionStyleModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "DescriptionStyleModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "StyleView",
+       "description_width": ""
+      }
+     },
+     "e4800108677b4b75ad247e9e8993c914": {
+      "model_module": "@jupyter-widgets/controls",
+      "model_module_version": "1.5.0",
+      "model_name": "HTMLModel",
+      "state": {
+       "_dom_classes": [],
+       "_model_module": "@jupyter-widgets/controls",
+       "_model_module_version": "1.5.0",
+       "_model_name": "HTMLModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/controls",
+       "_view_module_version": "1.5.0",
+       "_view_name": "HTMLView",
+       "description": "",
+       "description_tooltip": null,
+       "layout": "IPY_MODEL_473fcf181c6d4285af60c2699934f12c",
+       "placeholder": "​",
+       "style": "IPY_MODEL_5256896c377249729aa601505ab435f7",
+       "value": "100%"
+      }
+     },
+     "e5b4cebb39a940c1a0bac295177bb09e": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "f0c5f2960b03446687270155c89937ef": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     },
+     "f10eb88ab0e142bda4123ec8624d9103": {
+      "model_module": "@jupyter-widgets/base",
+      "model_module_version": "1.2.0",
+      "model_name": "LayoutModel",
+      "state": {
+       "_model_module": "@jupyter-widgets/base",
+       "_model_module_version": "1.2.0",
+       "_model_name": "LayoutModel",
+       "_view_count": null,
+       "_view_module": "@jupyter-widgets/base",
+       "_view_module_version": "1.2.0",
+       "_view_name": "LayoutView",
+       "align_content": null,
+       "align_items": null,
+       "align_self": null,
+       "border": null,
+       "bottom": null,
+       "display": null,
+       "flex": null,
+       "flex_flow": null,
+       "grid_area": null,
+       "grid_auto_columns": null,
+       "grid_auto_flow": null,
+       "grid_auto_rows": null,
+       "grid_column": null,
+       "grid_gap": null,
+       "grid_row": null,
+       "grid_template_areas": null,
+       "grid_template_columns": null,
+       "grid_template_rows": null,
+       "height": null,
+       "justify_content": null,
+       "justify_items": null,
+       "left": null,
+       "margin": null,
+       "max_height": null,
+       "max_width": null,
+       "min_height": null,
+       "min_width": null,
+       "object_fit": null,
+       "object_position": null,
+       "order": null,
+       "overflow": null,
+       "overflow_x": null,
+       "overflow_y": null,
+       "padding": null,
+       "right": null,
+       "top": null,
+       "visibility": null,
+       "width": null
+      }
+     }
+    },
+    "version_major": 2,
+    "version_minor": 0
+   }
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
